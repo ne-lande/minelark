@@ -10,7 +10,7 @@ launch the game with Minelark installed:
 <instance>/minelark/
 ├── startup/   # runs once at launch, before registries freeze: items, blocks
 ├── server/    # runs on world load and /minelark reload: recipes, events
-└── client/    # runs once on client start (nothing built-in yet)
+└── client/    # runs once on client start: tooltips, client chat, HUD, the client tick
 ```
 
 Any file ending in `.star` inside a phase folder gets run, in alphabetical order. Scripts are
@@ -22,7 +22,7 @@ independent: if one throws, Minelark logs it and keeps going with the rest.
 |---|---|---|
 | `startup/` | Once at launch, before the item/block registries freeze | Registering content |
 | `server/`  | On world load, and again on `/minelark reload` | Recipes, events, commands |
-| `client/`  | Once when the client starts | Client-side hooks (coming) |
+| `client/`  | Once when the client starts | [Client-side hooks](api/client.md): tooltips, chat, HUD, tick |
 
 Every phase gives you `print`, the [`log`](api/common.md) namespace, and
 [`load()`](#sharing-code-with-load). The content builtins differ by phase, and the list is still
