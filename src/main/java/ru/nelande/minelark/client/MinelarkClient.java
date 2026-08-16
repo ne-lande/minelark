@@ -54,7 +54,8 @@ public final class MinelarkClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ClientResult result = StarlarkHost.runClient(
-                Minelark.scriptDir("client"), CLIENT_ACCESS, Minelark.SCRIPT_LOG);
+                Minelark.scriptDir("client"), CLIENT_ACCESS,
+                Minelark.platformInfo(), Minelark.registryAccess(), Minelark.SCRIPT_LOG);
         clientEvents = result.events();
         debug = result.debug();
         registerClientEvents();

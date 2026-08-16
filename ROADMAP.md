@@ -125,8 +125,16 @@ write into the same pack.
 - ⏳ Networking (server ↔ client) - advanced (the only path that could carry server events to a client).
 
 ### M7 - Interop & integrations
-- Curated, whitelisted Java bridge (sandbox-preserving).
-- JEI/REI hooks; mod-compat helpers.
+- ✅ **Curated interop bridge (sandbox-preserving), mod-compat helpers**: `mods` +
+  `registry` namespaces in server + client scripts. `mods.loaded/version/name/list` query the
+  Fabric mod list so a pack can branch on what else is installed; `registry.item_exists/
+  block_exists/entity_exists/fluid_exists` and `registry.items/blocks/entities/fluids(namespace=)`
+  read the game registries (bare ids default to `minecraft:`). Read-only discovery, no reflection -
+  the curated stand-in for KubeJS's `Java.loadClass`. Backed by MC-agnostic `PlatformInfo` /
+  `RegistryAccess` interfaces (mirrors of `ClientAccess`); the adapter uses `FabricLoader` +
+  `Registries`. Tier-1 tested (`InteropTest`) and validated live on a headless server (registries
+  populated, mods listed). Docs auto-generated (`docs/api/{mods,registry}.md`).
+- ⏳ JEI/REI hooks (need third-party soft deps + can't be Tier-1 tested; deferred).
 
 ### M8 - Multiloader *(future)*
 - Extract a `Platform` service interface (registration, events, paths).

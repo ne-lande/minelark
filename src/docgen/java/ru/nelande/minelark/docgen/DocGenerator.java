@@ -4,7 +4,9 @@ import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.StarlarkInt;
 import ru.nelande.minelark.script.Log;
+import ru.nelande.minelark.script.ModsApi;
 import ru.nelande.minelark.script.Recipes;
+import ru.nelande.minelark.script.RegistryApi;
 import ru.nelande.minelark.script.StartupApi;
 
 import java.io.IOException;
@@ -66,6 +68,34 @@ public final class DocGenerator {
 
                     Server scripts also react to [events](events.md), send styled [text](text.md), \
                     and register their own [commands](commands.md).
+                    """),
+            new Phase(
+                    "Mods API Reference",
+                    "mods.md",
+                    ModsApi.class,
+                    "mods",
+                    """
+                    The **`mods`** namespace, available to **server** and **client** scripts. Use it to \
+                    check what else is installed so a pack can adapt to its environment - for example, \
+                    only add a recipe when the mod it depends on is present:
+
+                    ```python
+                    if mods.loaded("create"):
+                        recipes.shapeless("create:cogwheel", ["minelark:ruby"])
+                    ```
+                    """),
+            new Phase(
+                    "Registry API Reference",
+                    "registry.md",
+                    RegistryApi.class,
+                    "registry",
+                    """
+                    The **`registry`** namespace, available to **server** and **client** scripts. Query \
+                    the game registries to see whether an item/block/entity/fluid exists and to list the \
+                    ids other mods registered. Ids without a namespace default to `minecraft:`.
+
+                    This is read-only discovery - a sandbox-preserving window onto the game's content, \
+                    with no reflection into other mods.
                     """)
             // Note: the `events` API (docs/api/events.md) is hand-written - its nested
             // `events.<namespace>.<EVENT>` shape doesn't fit this flat generator.

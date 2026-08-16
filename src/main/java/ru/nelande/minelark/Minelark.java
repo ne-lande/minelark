@@ -72,8 +72,10 @@ import ru.nelande.minelark.script.Log;
 import ru.nelande.minelark.script.Events;
 import ru.nelande.minelark.script.ItemSpec;
 import ru.nelande.minelark.script.MineText;
+import ru.nelande.minelark.script.PlatformInfo;
 import ru.nelande.minelark.script.PlayerActions;
 import ru.nelande.minelark.script.PlayerView;
+import ru.nelande.minelark.script.RegistryAccess;
 import ru.nelande.minelark.script.RecipeSpec;
 import ru.nelande.minelark.script.ScriptLog;
 import ru.nelande.minelark.script.ServerResult;
@@ -140,11 +142,75 @@ public class Minelark implements ModInitializer {
 
     /** Re-runs server scripts and rewrites the generated data pack. Returns what was declared. */
     public static ServerResult reloadServerData() {
-        ServerResult result = StarlarkHost.runServer(scriptDir("server"), SCRIPT_LOG);
+        ServerResult result = StarlarkHost.runServer(
+                scriptDir("server"), platformInfo(), registryAccess(), SCRIPT_LOG);
         regeneratePack(result.recipes());
         serverEvents = result.events();
         serverCommands = result.commands();
         return result;
+    }
+
+    /** The {@code mods} namespace's backing: reads the Fabric mod list. Shared with the client adapter. */
+    public static PlatformInfo platformInfo() {
+        FabricLoader loader = FabricLoader.getInstance();
+        return new PlatformInfo() {
+            @Override
+            public boolean isLoaded(String modId) {
+                return loader.isModLoaded(modId);
+            }
+
+            @Override
+            public String version(String modId) {
+                return loader.getModContainer(modId)
+                        .map(c -> c.getMetadata().getVersion().getFriendlyString())
+                        .orElse(null);
+            }
+
+            @Override
+            public String name(String modId) {
+                return loader.getModContainer(modId)
+                        .map(c -> c.getMetadata().getName())
+                        .orElse(null);
+            }
+
+            @Override
+            public List<String> ids() {
+                return loader.getAllMods().stream()
+                        .map(c -> c.getMetadata().getId())
+                        .sorted()
+                        .toList();
+            }
+        };
+    }
+
+    /** The {@code registry} namespace's backing: reads the game registries. Shared with the client adapter. */
+    public static RegistryAccess registryAccess() {
+        return new RegistryAccess() {
+            @Override
+            public boolean has(Kind kind, String id) {
+                Identifier parsed = Identifier.tryParse(id);
+                return parsed != null && registry(kind).containsId(parsed);
+            }
+
+            @Override
+            public List<String> ids(Kind kind, String namespace) {
+                return registry(kind).getIds().stream()
+                        .filter(id -> namespace == null || namespace.isEmpty()
+                                || id.getNamespace().equals(namespace))
+                        .map(Identifier::toString)
+                        .sorted()
+                        .toList();
+            }
+        };
+    }
+
+    private static Registry<?> registry(RegistryAccess.Kind kind) {
+        return switch (kind) {
+            case ITEM -> Registries.ITEM;
+            case BLOCK -> Registries.BLOCK;
+            case ENTITY_TYPE -> Registries.ENTITY_TYPE;
+            case FLUID -> Registries.FLUID;
+        };
     }
 
     private static void regeneratePack(List<RecipeSpec> recipes) {
@@ -705,6 +771,11 @@ public class Minelark implements ModInitializer {
             # Convert between the two example gems in a crafting grid.
             recipes.shapeless("minelark:ruby", ["minelark:sapphire"])
             recipes.shapeless("minelark:sapphire", ["minelark:ruby"])
+
+            # Adapt to what else is installed: `mods` and `registry` let a pack branch on its
+            # environment without ever reaching into other mods directly.
+            if mods.loaded("minecraft") and registry.item_exists("diamond"):
+                log.info("Running on Minecraft with diamonds; " + str(len(mods.list())) + " mod(s) loaded.")
 
             # Run code when the world has finished loading. The callback receives the event `ctx`.
             def on_started(ctx):

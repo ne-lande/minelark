@@ -50,4 +50,6 @@ nav:
       - Events: api/events.md
       - Text: api/text.md
       - Commands: api/commands.md
+      - Mods: api/mods.md
+      - Registry: api/registry.md
   - Roadmap: roadmap.md

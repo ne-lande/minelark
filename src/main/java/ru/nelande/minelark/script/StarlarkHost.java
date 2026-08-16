@@ -27,18 +27,30 @@ public final class StarlarkHost {
         return new StartupResult(api.items(), api.blocks());
     }
 
+    /** Like {@link #runServer(Path, PlatformInfo, RegistryAccess, ScriptLog)} with no interop bridge. */
+    public static ServerResult runServer(Path serverDir, ScriptLog log) {
+        return runServer(serverDir, PlatformInfo.EMPTY, RegistryAccess.EMPTY, log);
+    }
+
     /**
      * Runs the server phase (data generation + {@code /minelark reload}) and returns the reloadable
-     * content it declared (recipes, and later loot).
+     * content it declared (recipes, and later loot). The {@code platform}/{@code registry} bridge
+     * backs the {@code mods} and {@code registry} namespaces.
      */
-    public static ServerResult runServer(Path serverDir, ScriptLog log) {
+    public static ServerResult runServer(
+            Path serverDir, PlatformInfo platform, RegistryAccess registry, ScriptLog log) {
         Log console = new Log(log);
         Recipes recipes = new Recipes();
         Events events = new Events(console, Events.Scope.SERVER);
         CommandsApi commands = new CommandsApi(console);
         ImmutableMap<String, Object> env = environmentWith(
                 console,
-                Map.of("recipes", recipes, "events", events, "commands", commands),
+                Map.of(
+                        "recipes", recipes,
+                        "events", events,
+                        "commands", commands,
+                        "mods", new ModsApi(platform),
+                        "registry", new RegistryApi(registry)),
                 new TextApi());
         int scripts = new ScriptEngine(serverDir, env, console, log).runAll();
         return new ServerResult(recipes.recipes(), events, commands, scripts);
@@ -51,12 +63,23 @@ public final class StarlarkHost {
      * namespace (local player/world/actions, backed by {@code access}), and the {@code debug} namespace.
      */
     public static ClientResult runClient(Path clientDir, ClientAccess access, ScriptLog log) {
+        return runClient(clientDir, access, PlatformInfo.EMPTY, RegistryAccess.EMPTY, log);
+    }
+
+    /** Like {@link #runClient(Path, ClientAccess, ScriptLog)}, plus the {@code mods}/{@code registry} bridge. */
+    public static ClientResult runClient(
+            Path clientDir, ClientAccess access, PlatformInfo platform, RegistryAccess registry, ScriptLog log) {
         Log console = new Log(log);
         Events events = new Events(console, Events.Scope.CLIENT);
         DebugApi debug = new DebugApi();
         ImmutableMap<String, Object> env = environmentWith(
                 console,
-                Map.of("events", events, "client", new ClientApi(access), "debug", debug),
+                Map.of(
+                        "events", events,
+                        "client", new ClientApi(access),
+                        "debug", debug,
+                        "mods", new ModsApi(platform),
+                        "registry", new RegistryApi(registry)),
                 new TextApi());
         int scripts = new ScriptEngine(clientDir, env, console, log).runAll();
         return new ClientResult(events, debug, scripts);
