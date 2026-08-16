@@ -1,8 +1,10 @@
 # Events API Reference
 
-The `events` namespace (server scripts) runs your code when something happens in game. Events are
-grouped by namespace, the same way Minecraft ids are, so two mods can define an event with the same
-short name without stepping on each other:
+The `events` namespace runs your code when something happens in game. It is available to both
+server scripts (`minelark/server/`) and client scripts (`minelark/client/`). Server events cover the
+world and its players; client events fire on a single player's own machine (tooltips, incoming chat,
+the client tick). Events are grouped by namespace, the same way Minecraft ids are, so two mods can
+define an event with the same short name without stepping on each other:
 
 ```python
 events.minelark.SERVER_STARTED.on(handler)   # Minelark's own events
@@ -10,7 +12,10 @@ events.somemod.SOME_EVENT.on(handler)         # another mod's events, once it in
 ```
 
 The event names are typed constants. If you misspell one (`events.minelark.SEVER_STARTED`) you get
-an error immediately, rather than a handler that silently never fires.
+an error immediately, rather than a handler that silently never fires. The same applies if you reach
+for an event from the wrong phase - a server script asking for a client event (or the reverse) is
+rejected on the spot, because that handler could never fire (a client can't observe server events
+without networking, which Minelark doesn't do yet).
 
 ## Subscribing
 
@@ -147,6 +152,10 @@ events.of("somemod:custom_event").on(...)
 All under the `minelark` namespace. "Cancel" marks events you can stop with `ctx.cancel()`; "Edit"
 lists the fields you can reassign.
 
+### Server events
+
+For scripts in `minelark/server/`.
+
 | Event | When it fires | Extra `ctx` fields | Cancel | Edit |
 |---|---|---|---|---|
 | `SERVER_STARTED` | Once, after the server or world finishes loading. | - | no | - |
@@ -159,6 +168,35 @@ lists the fields you can reassign.
 | `BLOCK_PLACED` | Just before a player places a block. | `player`, `block`, `x`, `y`, `z`, `level` | yes | - |
 | `COMMAND` | Before a command runs. | `player` (absent for the console), `command` | yes | `command` |
 | `EXPLOSION` | An explosion goes off (notification). | `x`, `y`, `z`, `power`, `level` | no | - |
+
+### Client events
+
+For scripts in `minelark/client/`. These run on the player's own machine, so they only ever fire in
+single-player or on the client of a multiplayer session - never on a dedicated server.
+
+| Event | When it fires | Extra `ctx` fields | Cancel | Edit |
+|---|---|---|---|---|
+| `CLIENT_STARTED` | Once, after the game client finishes starting. | - | no | - |
+| `CLIENT_STOPPING` | Once, as the client shuts down. | - | no | - |
+| `CLIENT_TICK` | Every client tick (20 a second). Keep the work tiny. | - | no | - |
+| `ITEM_TOOLTIP` | While an item's tooltip is built. | `item`, `lines` | no | `lines` |
+| `CLIENT_CHAT_RECEIVED` | A chat or system message arrives. Cancel to hide it. | `message` | yes | `message` (system messages only) |
+| `CLIENT_CHAT_SENT` | Just before you send a chat message. Cancel to stop it. | `message` | yes | `message` |
+
+`ITEM_TOOLTIP` is how you change tooltips. `ctx.lines` is the list of lines the tooltip will show,
+each a string or a `text(...)` component. Reassign it to add, remove, or reorder lines; leave it
+alone and the tooltip is untouched:
+
+```python
+def show_id(ctx):
+    ctx.lines = ctx.lines + [text("id: " + ctx.item.id).color("dark_gray")]
+
+events.minelark.ITEM_TOOLTIP.on(show_id)
+```
+
+Editing incoming chat only works for system and game messages. A signed player message can be hidden
+(`ctx.cancel()`) but not rewritten, so reassigning `ctx.message` on one is ignored - the same signing
+limitation the server-side `PLAYER_CHAT` has.
 
 A note on chat editing: chat messages are signed, so a rewritten `ctx.message` can't be slipped back
 into the original line. Minelark handles it by cancelling the original and re-sending your edited text

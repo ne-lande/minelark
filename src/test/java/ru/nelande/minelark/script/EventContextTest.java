@@ -158,6 +158,19 @@ class EventContextTest {
     }
 
     @Test
+    void clientEventFromServerScriptIsRejected(@TempDir Path dir) throws IOException {
+        TestLog log = new TestLog();
+        Events events = run(dir, log, """
+                def f(ctx):
+                    pass
+                events.minelark.CLIENT_TICK.on(f)
+                """);
+
+        assertFalse(events.hasListeners("minelark:client_tick"));
+        assertTrue(log.anyMessageContains("CLIENT_TICK is a client event"), "got " + log.messages);
+    }
+
+    @Test
     void allNewConstantsResolveAndSubscribe(@TempDir Path dir) throws IOException {
         TestLog log = new TestLog();
         Events events = run(dir, log, """

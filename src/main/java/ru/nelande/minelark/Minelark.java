@@ -134,7 +134,7 @@ public class Minelark implements ModInitializer {
     /** The startup content, kept so {@code /minelark reload} can rebuild the pack with fresh recipes. */
     private static StartupResult startup = new StartupResult(List.of(), List.of());
     /** The most recently loaded server-script event callbacks (replaced on load/reload). */
-    private static Events serverEvents = new Events(new Log(SCRIPT_LOG));
+    private static Events serverEvents = new Events(new Log(SCRIPT_LOG), Events.Scope.SERVER);
     /** The most recently loaded server-script custom commands (replaced on load/reload). */
     private static CommandsApi serverCommands = new CommandsApi(new Log(SCRIPT_LOG));
 
@@ -737,8 +737,35 @@ public class Minelark implements ModInitializer {
 
     private static final String DEFAULT_CLIENT_SCRIPT = """
             # Minelark client script.
-            # Runs once when the client starts.
+            # Runs once when the game client starts. These events fire on your own machine.
 
             log.info("Client scripts loaded.")
+
+            # Run code once the client has finished starting up.
+            def on_started(ctx):
+                log.info("Client is ready!")
+
+            events.minelark.CLIENT_STARTED.on(on_started)
+
+            # Add a line to every item's tooltip. ctx.lines is the tooltip; reassign it to change it.
+            def on_tooltip(ctx):
+                ctx.lines = ctx.lines + [text("id: " + ctx.item.id).color("dark_gray")]
+
+            events.minelark.ITEM_TOOLTIP.on(on_tooltip)
+
+            # Hide incoming messages you would rather not see. Cancelling drops the line.
+            def on_chat(ctx):
+                if "spoiler" in ctx.message:
+                    ctx.cancel()
+
+            events.minelark.CLIENT_CHAT_RECEIVED.on(on_chat)
+
+            # Show your coordinates on the F3 debug screen. `client` reads the local player live.
+            def on_tick(ctx):
+                p = client.player
+                if p:
+                    debug.set("pos", str(int(p.x)) + ", " + str(int(p.y)) + ", " + str(int(p.z)))
+
+            events.minelark.CLIENT_TICK.on(on_tick)
             """;
 }

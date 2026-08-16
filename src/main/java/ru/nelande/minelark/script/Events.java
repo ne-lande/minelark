@@ -31,16 +31,41 @@ import java.util.regex.Pattern;
 public final class Events implements StarlarkValue {
     private static final Pattern ID = Pattern.compile("[a-z0-9_.-]+:[a-z0-9_./-]+");
 
+    /**
+     * Which lifecycle phase these events belong to. Server and client events are addressed by the
+     * same {@code events.minelark.*} constants, but a server script may only use server events and a
+     * client script only client events - the wrong side would silently never fire (server events are
+     * unreachable from a networked client), so it is rejected up front instead. See
+     * {@link EventNamespace}.
+     */
+    public enum Scope {
+        SERVER("server"),
+        CLIENT("client");
+
+        private final String folder;
+
+        Scope(String folder) {
+            this.folder = folder;
+        }
+
+        /** The script folder name for this phase, e.g. {@code "server"} - used in error messages. */
+        public String folder() {
+            return folder;
+        }
+    }
+
     private final Map<String, List<StarlarkCallable>> handlers = new LinkedHashMap<>();
     private final Log log;
+    private final Scope scope;
 
-    public Events(Log log) {
+    public Events(Log log, Scope scope) {
         this.log = log;
+        this.scope = scope;
     }
 
     @StarlarkMethod(name = "minelark", structField = true, doc = "Minelark's own (core) events.")
     public EventNamespace minelark() {
-        return new EventNamespace(this, "minelark");
+        return new EventNamespace(this, "minelark", scope);
     }
 
     @StarlarkMethod(

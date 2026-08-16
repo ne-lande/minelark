@@ -19,7 +19,11 @@
     ]
   },
   "mixins": [
-    "minelark.mixins.json"
+    "minelark.mixins.json",
+    {
+      "config": "minelark.client.mixins.json",
+      "environment": "client"
+    }
   ],
   "depends": {
     "fabricloader": ">=0.15",

@@ -34,7 +34,7 @@ public final class StarlarkHost {
     public static ServerResult runServer(Path serverDir, ScriptLog log) {
         Log console = new Log(log);
         Recipes recipes = new Recipes();
-        Events events = new Events(console);
+        Events events = new Events(console, Events.Scope.SERVER);
         CommandsApi commands = new CommandsApi(console);
         ImmutableMap<String, Object> env = environmentWith(
                 console,
@@ -45,13 +45,21 @@ public final class StarlarkHost {
     }
 
     /**
-     * Runs the client phase (on client startup); returns how many top-level scripts were executed.
-     * Client-specific builtins arrive in later milestones.
+     * Runs the client phase (on client startup) and returns what it registered: the event callbacks
+     * (client lifecycle, tick, tooltip, chat) and the {@code debug} overlay lines. Client scripts get
+     * the {@code events} namespace, the {@code text}/{@code translate} builtins, the {@code client}
+     * namespace (local player/world/actions, backed by {@code access}), and the {@code debug} namespace.
      */
-    public static int runClient(Path clientDir, ScriptLog log) {
+    public static ClientResult runClient(Path clientDir, ClientAccess access, ScriptLog log) {
         Log console = new Log(log);
-        ImmutableMap<String, Object> env = environment(console);
-        return new ScriptEngine(clientDir, env, console, log).runAll();
+        Events events = new Events(console, Events.Scope.CLIENT);
+        DebugApi debug = new DebugApi();
+        ImmutableMap<String, Object> env = environmentWith(
+                console,
+                Map.of("events", events, "client", new ClientApi(access), "debug", debug),
+                new TextApi());
+        int scripts = new ScriptEngine(clientDir, env, console, log).runAll();
+        return new ClientResult(events, debug, scripts);
     }
 
     /**

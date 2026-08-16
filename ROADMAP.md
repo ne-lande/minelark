@@ -101,8 +101,28 @@ write into the same pack.
   (headless has no client).
 
 ### M6 - Client scripts *(KubeJS: client)*
-- Client lifecycle/tick; tooltip & chat events; HUD/debug.
-- Networking (server ↔ client) - advanced.
+- ✅ **Client scripts get `events` + `text`/`translate`**: `runClient` now builds the same
+  namespaced-event API as the server phase and returns a `ClientResult`; `MinelarkClient` is the
+  client-side adapter (mirror of `Minelark`), firing Fabric client events into the callbacks. The
+  `events` namespace is **phase-scoped**: referencing a server event from a client script (or the
+  reverse) errors on the spot rather than registering a handler that could never fire.
+- ✅ **Client lifecycle + tick**: `CLIENT_STARTED`, `CLIENT_STOPPING`, `CLIENT_TICK` (tick gated on
+  `hasListeners`, like `SERVER_TICK`).
+- ✅ **`client` + `debug` namespaces**: `client.player` / `client.world` (live local player/world),
+  `client.send_chat` (chat or `/command`), `client.show_message` (local-only); `debug.set/remove/
+  clear` add keyed lines to the F3 overlay via `DebugHudMixin` (client-only mixin config). Backed by
+  a MC-agnostic `ClientAccess` interface (mirror of `PlayerActions`).
+- ✅ **Tooltip event**: `ITEM_TOOLTIP` with `ctx.item` and editable `ctx.lines` seeded with the
+  current lines (top-level style preserved) - reassign to add / remove / reorder; untouched = vanilla
+  tooltip left as-is.
+- ✅ **Client chat + editing**: `CLIENT_CHAT_RECEIVED` (incoming, cancel = hide; system messages
+  rewritable via `ctx.message`, signed player chat cancel-only) and `CLIENT_CHAT_SENT` (outgoing,
+  cancel = stop, rewrite via `ctx.message`). Editing uses the Fabric `MODIFY_*` events coordinated
+  with the `ALLOW_*` pass via a thread-local so callbacks fire once.
+- ✅ Tier-1 tested (`ClientScriptTest`, with a `FakeClient` for `ClientAccess`); MC-touching wiring is
+  compile-validated + loads-clean only (the headless dev env has no client to smoke-test against).
+- ⏳ HUD rendering beyond the F3 overlay (drawing to the screen).
+- ⏳ Networking (server ↔ client) - advanced (the only path that could carry server events to a client).
 
 ### M7 - Interop & integrations
 - Curated, whitelisted Java bridge (sandbox-preserving).

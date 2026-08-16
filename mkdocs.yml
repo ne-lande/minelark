@@ -46,6 +46,7 @@ nav:
       - Common (log): api/common.md
       - Startup: api/startup.md
       - Server (recipes): api/server.md
+      - Client: api/client.md
       - Events: api/events.md
       - Text: api/text.md
       - Commands: api/commands.md
