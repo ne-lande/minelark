@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "minelark",
+  "version": "${version}",
+  "name": "Minelark",
+  "description": "A Fabric Minecraft mod.",
+  "authors": [
+    "nelande"
+  ],
+  "contact": {},
+  "license": "LGPL-3.0-or-later",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "ru.nelande.minelark.Minelark"
+    ],
+    "client": [
+      "ru.nelande.minelark.client.MinelarkClient"
+    ]
+  },
+  "mixins": [
+    "minelark.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.15",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

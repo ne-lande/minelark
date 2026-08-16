@@ -1,0 +1,28 @@
+# direnv / nix-direnv cache
+/.direnv/
+
+# Gradle
+.gradle/
+build/
+*/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Minecraft / mod dev
+run/
+*/run/
+.architectury-transformer/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+
+# Docs site (built artifacts + roadmap copied in from the repo root at build time)
+/site/
+/docs/roadmap.md

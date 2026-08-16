@@ -1,0 +1,11 @@
+# Normalise line endings; treat these as text.
+* text=auto eol=lf
+
+# Gradle wrapper scripts
+*.bat           text eol=crlf
+gradlew         text eol=lf
+
+# Binary assets
+*.jar           binary
+*.png           binary
+*.ogg           binary

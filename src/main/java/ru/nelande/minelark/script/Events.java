@@ -1,0 +1,95 @@
+package ru.nelande.minelark.script;
+
+import net.starlark.java.annot.Param;
+import net.starlark.java.annot.StarlarkMethod;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Mutability;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkCallable;
+import net.starlark.java.eval.StarlarkSemantics;
+import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.eval.StarlarkValue;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+
+/**
+ * Root of the {@code events} API for server scripts. Events are addressed by namespace, mirroring
+ * Minecraft ids so different mods can never clash:
+ *
+ * <pre>{@code
+ * events.minelark.SERVER_STARTED.on(handler)   # core events (namespace "minelark")
+ * events.somemod.SOME_EVENT.on(handler)        # a mod's events (when integrated)
+ * events.of("minelark:server_started").on(...)  # fallback: any event by raw id
+ * }</pre>
+ *
+ * <p>Each callback receives a single {@code ctx} argument (the event context).
+ */
+public final class Events implements StarlarkValue {
+    private static final Pattern ID = Pattern.compile("[a-z0-9_.-]+:[a-z0-9_./-]+");
+
+    private final Map<String, List<StarlarkCallable>> handlers = new LinkedHashMap<>();
+    private final Log log;
+
+    public Events(Log log) {
+        this.log = log;
+    }
+
+    @StarlarkMethod(name = "minelark", structField = true, doc = "Minelark's own (core) events.")
+    public EventNamespace minelark() {
+        return new EventNamespace(this, "minelark");
+    }
+
+    @StarlarkMethod(
+            name = "of",
+            doc = "Looks up an event by its full `namespace:path` id - for events not exposed as a named "
+                    + "constant (e.g. contributed by another mod).",
+            parameters = {@Param(name = "id", doc = "The event id, e.g. `\"minelark:server_started\"`.")})
+    public Event of(String id) throws EvalException {
+        String trimmed = id.trim();
+        if (!ID.matcher(trimmed).matches()) {
+            throw new EvalException("events.of() invalid event id '" + id + "' (expected namespace:path)");
+        }
+        return new Event(this, trimmed);
+    }
+
+    // --- registry, used by Event ---
+
+    void register(String id, StarlarkCallable callback) {
+        handlers.computeIfAbsent(id, key -> new ArrayList<>()).add(callback);
+    }
+
+    boolean unregister(String id, StarlarkCallable callback) {
+        List<StarlarkCallable> list = handlers.get(id);
+        return list != null && list.remove(callback);
+    }
+
+    List<StarlarkCallable> listeners(String id) {
+        return handlers.getOrDefault(id, List.of());
+    }
+
+    /** Invokes every callback registered for {@code id}, passing a fresh {@link EventContext}. */
+    public void fire(String id, ScriptLog sink) {
+        String source = "event:" + id;
+        EventContext ctx = new EventContext(id);
+        for (StarlarkCallable callback : List.copyOf(listeners(id))) {
+            log.setSource(source); // tag log.* inside the callback with the event
+            try (Mutability mu = Mutability.create(source)) {
+                StarlarkThread thread = new StarlarkThread(mu, StarlarkSemantics.DEFAULT);
+                thread.setPrintHandler((t, message) -> sink.info("[" + source + "] " + message));
+                Starlark.call(thread, callback, List.of(ctx), Map.of());
+            } catch (EvalException e) {
+                sink.error("[" + source + "] " + e.getMessageWithStack());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                sink.error("[" + source + "] interrupted");
+                return;
+            } finally {
+                log.setSource("");
+            }
+        }
+    }
+}

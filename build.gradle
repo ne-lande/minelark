@@ -1,0 +1,124 @@
+plugins {
+    id 'fabric-loom' version '1.8.13'
+    id 'com.gradleup.shadow' version '8.3.5'
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+sourceSets {
+    // Build-only: generates the API reference from @StarlarkMethod annotations. Not shipped.
+    docgen
+}
+
+configurations {
+    // Libraries to bundle (shade) into the final mod jar. They are also placed on the
+    // compile and dev-runtime classpaths via the extendsFrom below.
+    shade
+    implementation.extendsFrom shade
+
+    // The doc generator needs the same libraries (Starlark) as main, plus main's own classes.
+    docgenImplementation.extendsFrom implementation
+}
+
+repositories {
+    // Loom adds the essential Maven repositories automatically. Add extra ones here.
+}
+
+dependencies {
+    // To change the versions, see the gradle.properties file.
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    // Starlark interpreter (Bazel's reference net.starlark.java, repackaged).
+    // Guava is provided by Minecraft at runtime, so we bundle ONLY the Starlark classes.
+    shade("com.eed3si9n.starlark:starlark:${project.starlark_version}") { transitive = false }
+
+    // Tests (interop can be exercised without launching Minecraft).
+    testImplementation "org.junit.jupiter:junit-jupiter:5.11.3"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+
+    // The doc generator reads the compiled main classes (the annotated API) via reflection.
+    docgenImplementation sourceSets.main.output
+}
+
+processResources {
+    inputs.property "version", project.version
+
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    // Minecraft 1.21.x requires Java 21.
+    it.options.release = 21
+}
+
+java {
+    withSourcesJar()
+
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+test {
+    useJUnitPlatform()
+}
+
+// Regenerate docs/api/*.md from the @StarlarkMethod annotations (single source of truth).
+tasks.register('generateApiDocs', JavaExec) {
+    group = 'documentation'
+    description = 'Generate docs/api/*.md from @StarlarkMethod annotations.'
+    dependsOn tasks.named('classes')
+    classpath = sourceSets.docgen.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'ru.nelande.minelark.docgen.DocGenerator'
+    args = [projectDir.toString()]
+}
+
+// Fails if the committed API docs are stale relative to the annotations (used in CI).
+tasks.register('checkApiDocs', JavaExec) {
+    group = 'verification'
+    description = 'Verify docs/api/*.md are up to date with the annotations.'
+    dependsOn tasks.named('classes')
+    classpath = sourceSets.docgen.runtimeClasspath + sourceSets.main.runtimeClasspath
+    mainClass = 'ru.nelande.minelark.docgen.DocGenerator'
+    args = [projectDir.toString(), '--check']
+}
+
+// Make `check` (and therefore `build`/CI) fail if the committed API docs are stale.
+tasks.named('check') {
+    dependsOn tasks.named('checkApiDocs')
+}
+
+// Bundle the shaded libraries alongside our classes, then let Loom remap the result
+// into the final, mappings-correct mod jar.
+shadowJar {
+    configurations = [project.configurations.shade]
+    archiveClassifier = "dev-shadow"
+}
+
+remapJar {
+    inputFile = shadowJar.archiveFile
+    dependsOn shadowJar
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = project.archives_base_name
+            from components.java
+        }
+    }
+
+    repositories {
+        // Add repositories to publish to here.
+    }
+}

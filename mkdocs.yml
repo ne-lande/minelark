@@ -1,0 +1,50 @@
+site_name: Minelark
+site_description: A KubeJS-style scripting bridge for Minecraft, powered by the Starlark language.
+# TODO: after creating the GitHub repo, set these to enable "edit" links and the canonical URL:
+# site_url: https://<owner>.github.io/minelark/
+# repo_url: https://github.com/<owner>/minelark
+
+docs_dir: docs
+
+theme:
+  name: material
+  icon:
+    logo: material/script-text-outline
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tracking
+    - navigation.top
+    - navigation.sections
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+nav:
+  - Home: README.md
+  - Getting Started: getting-started.md
+  - The Starlark Language: language.md
+  - API Reference:
+      - Common (log): api/common.md
+      - Startup: api/startup.md
+      - Server (recipes): api/server.md
+      - Events: api/events.md
+  - Roadmap: roadmap.md
