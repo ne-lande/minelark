@@ -1,34 +1,79 @@
 package ru.nelande.minelark;
 
+import com.mojang.brigadier.Command;
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.ArgumentBuilder;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
+import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.registry.FuelRegistry;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
+import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.command.argument.IdentifierArgumentType;
 import net.minecraft.component.type.FoodComponent;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityType;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemGroups;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.ClickEvent;
+import net.minecraft.text.HoverEvent;
+import net.minecraft.text.MutableText;
+import net.minecraft.text.Style;
+import net.minecraft.text.TextColor;
+import net.minecraft.util.Formatting;
 import net.minecraft.util.Rarity;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import net.minecraft.world.World;
+import net.starlark.java.eval.Dict;
+import net.starlark.java.eval.StarlarkFloat;
+import net.starlark.java.eval.StarlarkInt;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.nelande.minelark.pack.GeneratedDataPack;
 import ru.nelande.minelark.script.BlockSpec;
+import ru.nelande.minelark.script.ArgSpec;
+import ru.nelande.minelark.script.CommandSourceView;
+import ru.nelande.minelark.script.CommandSpec;
+import ru.nelande.minelark.script.CommandsApi;
+import ru.nelande.minelark.script.EntityView;
+import ru.nelande.minelark.script.EventContext;
+import ru.nelande.minelark.script.ItemStackView;
+import ru.nelande.minelark.script.LevelView;
 import ru.nelande.minelark.script.Log;
 import ru.nelande.minelark.script.Events;
 import ru.nelande.minelark.script.ItemSpec;
+import ru.nelande.minelark.script.MineText;
+import ru.nelande.minelark.script.PlayerActions;
+import ru.nelande.minelark.script.PlayerView;
 import ru.nelande.minelark.script.RecipeSpec;
 import ru.nelande.minelark.script.ScriptLog;
 import ru.nelande.minelark.script.ServerResult;
@@ -40,7 +85,10 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class Minelark implements ModInitializer {
     public static final String MOD_ID = "minelark";
@@ -76,6 +124,7 @@ public class Minelark implements ModInitializer {
                     .count();
             LOGGER.info("Minelark: {} recipe(s) active", recipeCount);
         });
+        registerRuntimeEvents();
         registerCommands();
 
         LOGGER.info("Minelark initialized with {} item(s), {} block(s), {} recipe(s).",
@@ -86,18 +135,265 @@ public class Minelark implements ModInitializer {
     private static StartupResult startup = new StartupResult(List.of(), List.of());
     /** The most recently loaded server-script event callbacks (replaced on load/reload). */
     private static Events serverEvents = new Events(new Log(SCRIPT_LOG));
+    /** The most recently loaded server-script custom commands (replaced on load/reload). */
+    private static CommandsApi serverCommands = new CommandsApi(new Log(SCRIPT_LOG));
 
     /** Re-runs server scripts and rewrites the generated data pack. Returns what was declared. */
     public static ServerResult reloadServerData() {
         ServerResult result = StarlarkHost.runServer(scriptDir("server"), SCRIPT_LOG);
         regeneratePack(result.recipes());
         serverEvents = result.events();
+        serverCommands = result.commands();
         return result;
     }
 
     private static void regeneratePack(List<RecipeSpec> recipes) {
         GeneratedDataPack.generate(
                 FabricLoader.getInstance().getGameDir(), startup.items(), startup.blocks(), recipes);
+    }
+
+    /**
+     * Bridges the runtime events (tick, player, block break, ...) to the server-script callbacks.
+     * Registered once; every handler reads the current {@link #serverEvents}, so {@code /minelark
+     * reload} swaps the subscriber set without re-registering with the game.
+     */
+    private static void registerRuntimeEvents() {
+        // Gate the once-per-tick event on having a listener so idle servers pay nothing.
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (serverEvents.hasListeners("minelark:server_tick")) {
+                dispatch("minelark:server_tick", Map.of(), Set.of(), false);
+            }
+        });
+
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) ->
+                dispatch("minelark:player_joined", data("player", playerView(handler.player)), Set.of(), false));
+
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
+                dispatch("minelark:player_left", data("player", playerView(handler.player)), Set.of(), false));
+
+        ServerLivingEntityEvents.ALLOW_DEATH.register((entity, source, amount) -> {
+            if (!(entity instanceof ServerPlayerEntity player)) {
+                return true;
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("player", playerView(player));
+            data.put("source", source.getName());
+            data.put("amount", (double) amount);
+            if (source.getAttacker() != null) {
+                data.put("attacker", entityView(source.getAttacker()));
+            }
+            EventContext ctx = dispatch("minelark:player_death", data, Set.of(), true);
+            return ctx == null || !ctx.isCancelled();  // false = keep them alive
+        });
+
+        ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, sender, params) -> {
+            String original = message.getSignedContent();
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("player", playerView(sender));
+            data.put("message", original);
+            EventContext ctx = dispatch("minelark:player_chat", data, Set.of("message"), true);
+            if (ctx == null) {
+                return true;
+            }
+            if (ctx.isCancelled()) {
+                return false;
+            }
+            String edited = ctx.editedString("message");
+            if (edited != null && !edited.equals(original)) {
+                // Signed chat can't be rewritten in place; block the original and resend the edit.
+                String name = sender.getName().getString();
+                sender.server.getPlayerManager().broadcast(
+                        Text.literal("<" + name + "> " + edited), false);
+                return false;
+            }
+            return true;
+        });
+
+        PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, blockEntity) -> {
+            if (world.isClient || !(player instanceof ServerPlayerEntity serverPlayer)
+                    || !serverEvents.hasListeners("minelark:block_broken")) {
+                return true;
+            }
+            EventContext ctx = dispatch("minelark:block_broken",
+                    blockData(playerView(serverPlayer), state, pos, levelView(world)), Set.of(), true);
+            return ctx == null || !ctx.isCancelled();  // false = cancel the break
+        });
+    }
+
+    // --- shared event plumbing, also called by the mixins below ---
+
+    /** Fires {@code id} with the given context data, returning the (mutated) ctx, or null if unheard. */
+    private static EventContext dispatch(String id, Map<String, Object> data, Set<String> editable, boolean cancellable) {
+        if (!serverEvents.hasListeners(id)) {
+            return null;
+        }
+        EventContext ctx = new EventContext(id, data, editable, cancellable);
+        serverEvents.fire(id, ctx, SCRIPT_LOG);
+        return ctx;
+    }
+
+    private static PlayerView playerView(ServerPlayerEntity player) {
+        return new PlayerView(
+                player.getName().getString(),
+                player.getUuidAsString(),
+                player.getX(), player.getY(), player.getZ(),
+                player.getHealth(),
+                itemStackView(player.getMainHandStack()),
+                levelView(player.getWorld()),
+                new PlayerActions() {
+                    @Override
+                    public void tell(MineText message) {
+                        player.sendMessage(toMcText(message));
+                    }
+
+                    @Override
+                    public void give(String itemId, int count) {
+                        Identifier id = Identifier.tryParse(itemId);
+                        Item item = id == null ? null : Registries.ITEM.get(id);
+                        if (item != null && item != Items.AIR) {
+                            player.giveItemStack(new ItemStack(item, count));
+                        }
+                    }
+
+                    @Override
+                    public void teleport(double x, double y, double z) {
+                        player.requestTeleport(x, y, z);
+                    }
+                });
+    }
+
+    private static LevelView levelView(World world) {
+        return new LevelView(
+                world.getRegistryKey().getValue().toString(),
+                world.getTimeOfDay(),
+                world.isDay(),
+                world.isRaining());
+    }
+
+    private static ItemStackView itemStackView(ItemStack stack) {
+        if (stack.isEmpty()) {
+            return ItemStackView.empty();
+        }
+        return new ItemStackView(
+                Registries.ITEM.getId(stack.getItem()).toString(),
+                stack.getCount(),
+                stack.getName().getString(),
+                false);
+    }
+
+    private static EntityView entityView(Entity entity) {
+        return new EntityView(
+                EntityType.getId(entity.getType()).toString(),
+                entity.getUuidAsString(),
+                entity.getName().getString(),
+                entity.getX(), entity.getY(), entity.getZ(),
+                levelView(entity.getWorld()));
+    }
+
+    /** Turns a script-built {@link MineText} component into a real Minecraft {@link Text}. */
+    public static MutableText toMcText(MineText text) {
+        MutableText mc = text.isTranslation()
+                ? Text.translatable(text.translateKey(), text.translateArgs().stream()
+                        .map(Minelark::toMcText).toArray())
+                : Text.literal(text.literal());
+
+        Style style = Style.EMPTY;
+        if (text.colorValue() != null) {
+            style = style.withColor(parseColor(text.colorValue()));
+        }
+        if (text.boldValue() != null) {
+            style = style.withBold(text.boldValue());
+        }
+        if (text.italicValue() != null) {
+            style = style.withItalic(text.italicValue());
+        }
+        if (text.underlinedValue() != null) {
+            style = style.withUnderline(text.underlinedValue());
+        }
+        if (text.strikethroughValue() != null) {
+            style = style.withStrikethrough(text.strikethroughValue());
+        }
+        if (text.obfuscatedValue() != null) {
+            style = style.withObfuscated(text.obfuscatedValue());
+        }
+        if (text.hoverText() != null) {
+            style = style.withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, toMcText(text.hoverText())));
+        }
+        if (text.clickAction() != null) {
+            style = style.withClickEvent(new ClickEvent(toClickAction(text.clickAction()), text.clickValue()));
+        }
+        mc.setStyle(style);
+
+        for (MineText child : text.extra()) {
+            mc.append(toMcText(child));
+        }
+        return mc;
+    }
+
+    private static TextColor parseColor(String value) {
+        if (value.startsWith("#")) {
+            return TextColor.fromRgb(Integer.parseInt(value.substring(1), 16));
+        }
+        return TextColor.fromFormatting(Formatting.byName(value));
+    }
+
+    private static ClickEvent.Action toClickAction(MineText.ClickAction action) {
+        return switch (action) {
+            case RUN_COMMAND -> ClickEvent.Action.RUN_COMMAND;
+            case SUGGEST_COMMAND -> ClickEvent.Action.SUGGEST_COMMAND;
+            case OPEN_URL -> ClickEvent.Action.OPEN_URL;
+            case COPY_TO_CLIPBOARD -> ClickEvent.Action.COPY_TO_CLIPBOARD;
+        };
+    }
+
+    private static String blockId(BlockState state) {
+        return Registries.BLOCK.getId(state.getBlock()).toString();
+    }
+
+    private static Map<String, Object> data(String key, Object value) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put(key, value);
+        return map;
+    }
+
+    private static Map<String, Object> blockData(PlayerView player, BlockState state, BlockPos pos, LevelView level) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("player", player);
+        map.put("block", blockId(state));
+        map.put("x", pos.getX());
+        map.put("y", pos.getY());
+        map.put("z", pos.getZ());
+        map.put("level", level);
+        return map;
+    }
+
+    /** Called by {@code BlockItemMixin}: fires {@code block_placed}, returns whether to cancel it. */
+    public static boolean fireBlockPlaced(ServerPlayerEntity player, BlockState state, BlockPos pos) {
+        EventContext ctx = dispatch("minelark:block_placed",
+                blockData(playerView(player), state, pos, levelView(player.getWorld())), Set.of(), true);
+        return ctx != null && ctx.isCancelled();
+    }
+
+    /** Called by {@code CommandManagerMixin}: fires {@code command}, returns the ctx (cancel/edit) or null. */
+    public static EventContext fireCommand(ServerCommandSource source, String command) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        ServerPlayerEntity player = source.getPlayer();
+        if (player != null) {
+            data.put("player", playerView(player));
+        }
+        data.put("command", command);
+        return dispatch("minelark:command", data, Set.of("command"), true);
+    }
+
+    /** Called by {@code ExplosionMixin}: fires the {@code explosion} notification. */
+    public static void fireExplosion(World world, Vec3d pos, float power) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("x", pos.x);
+        data.put("y", pos.y);
+        data.put("z", pos.z);
+        data.put("power", (double) power);
+        data.put("level", levelView(world));
+        dispatch("minelark:explosion", data, Set.of(), false);
     }
 
     private static void registerItems(List<ItemSpec> specs) {
@@ -224,22 +520,121 @@ public class Minelark implements ModInitializer {
     }
 
     private static void registerCommands() {
-        CommandRegistrationCallback.EVENT.register((dispatcher, access, environment) ->
-                dispatcher.register(CommandManager.literal(MOD_ID)
-                        .requires(source -> source.hasPermissionLevel(2))
-                        .then(CommandManager.literal("reload").executes(ctx -> {
-                            ServerResult result = reloadServerData();
-                            MinecraftServer server = ctx.getSource().getServer();
-                            server.reloadResources(server.getDataPackManager().getEnabledIds());
-                            ctx.getSource().sendFeedback(() -> Text.literal("Minelark: reloaded "
-                                    + result.scriptCount() + " server script(s), "
-                                    + result.recipes().size() + " recipe(s)"), true);
-                            return result.recipes().size();
-                        }))
-                        .then(CommandManager.literal("tags")
-                                .then(CommandManager.argument("item", IdentifierArgumentType.identifier())
-                                        .executes(ctx -> reportItemTags(
-                                                ctx.getSource(), IdentifierArgumentType.getIdentifier(ctx, "item")))))));
+        CommandRegistrationCallback.EVENT.register((dispatcher, access, environment) -> {
+            dispatcher.register(CommandManager.literal(MOD_ID)
+                    .requires(source -> source.hasPermissionLevel(2))
+                    .then(CommandManager.literal("reload").executes(ctx -> {
+                        ServerResult result = reloadServerData();
+                        MinecraftServer server = ctx.getSource().getServer();
+                        server.reloadResources(server.getDataPackManager().getEnabledIds());
+                        ctx.getSource().sendFeedback(() -> Text.literal("Minelark: reloaded "
+                                + result.scriptCount() + " server script(s), "
+                                + result.recipes().size() + " recipe(s)"), true);
+                        return result.recipes().size();
+                    }))
+                    .then(CommandManager.literal("tags")
+                            .then(CommandManager.argument("item", IdentifierArgumentType.identifier())
+                                    .executes(ctx -> reportItemTags(
+                                            ctx.getSource(), IdentifierArgumentType.getIdentifier(ctx, "item"))))));
+
+            // Script-registered commands. This callback re-fires when `/minelark reload` reloads
+            // resources, so added/removed/changed commands take effect on reload.
+            for (CommandSpec spec : serverCommands.commands()) {
+                registerScriptCommand(dispatcher, spec);
+            }
+        });
+    }
+
+    /** Builds a Brigadier node for a script-declared command and registers it. */
+    private static void registerScriptCommand(CommandDispatcher<ServerCommandSource> dispatcher, CommandSpec spec) {
+        Command<ServerCommandSource> exec = bctx -> runScriptCommand(spec, bctx);
+        List<ArgSpec> args = spec.args();
+        List<String> literals = spec.literals();
+
+        // Build the node chain from the inside out: arguments first, then literals.
+        ArgumentBuilder<ServerCommandSource, ?> current = null;
+        for (int i = args.size() - 1; i >= 0; i--) {
+            ArgSpec arg = args.get(i);
+            RequiredArgumentBuilder<ServerCommandSource, ?> node =
+                    CommandManager.argument(arg.name(), brigadierType(arg.type()));
+            if (i == args.size() - 1) {
+                node.executes(exec);
+            }
+            if (current != null) {
+                node.then(current);
+            }
+            current = node;
+        }
+        for (int i = literals.size() - 1; i >= 0; i--) {
+            LiteralArgumentBuilder<ServerCommandSource> node = CommandManager.literal(literals.get(i));
+            if (i == 0) {
+                node.requires(source -> source.hasPermissionLevel(spec.permission()));
+            }
+            if (i == literals.size() - 1 && args.isEmpty()) {
+                node.executes(exec);
+            }
+            if (current != null) {
+                node.then(current);
+            }
+            current = node;
+        }
+        @SuppressWarnings("unchecked")
+        LiteralArgumentBuilder<ServerCommandSource> root = (LiteralArgumentBuilder<ServerCommandSource>) current;
+        dispatcher.register(root);
+    }
+
+    private static com.mojang.brigadier.arguments.ArgumentType<?> brigadierType(String type) {
+        return switch (type) {
+            case "word" -> StringArgumentType.word();
+            case "string" -> StringArgumentType.greedyString();
+            case "int" -> IntegerArgumentType.integer();
+            case "float" -> FloatArgumentType.floatArg();
+            case "bool" -> BoolArgumentType.bool();
+            case "player" -> EntityArgumentType.player();
+            default -> throw new IllegalStateException("unknown arg type " + type);
+        };
+    }
+
+    /** Runs a script command: builds its {@code ctx}, invokes the handler, maps success to 1/0. */
+    private static int runScriptCommand(CommandSpec spec, CommandContext<ServerCommandSource> bctx)
+            throws CommandSyntaxException {
+        try {
+            LinkedHashMap<String, Object> args = new LinkedHashMap<>();
+            for (ArgSpec arg : spec.args()) {
+                args.put(arg.name(), readArg(arg, bctx));
+            }
+            ru.nelande.minelark.script.CommandContext ctx = new ru.nelande.minelark.script.CommandContext(
+                    commandSource(bctx.getSource()), Dict.immutableCopyOf(args));
+            return serverCommands.invoke(spec, ctx, SCRIPT_LOG) ? Command.SINGLE_SUCCESS : 0;
+        } catch (CommandSyntaxException e) {
+            throw e;  // let Brigadier report argument problems (e.g. player not found) normally
+        } catch (RuntimeException e) {
+            LOGGER.error("Minelark command /{} failed", spec.name(), e);
+            bctx.getSource().sendError(Text.literal("Minelark: command '" + spec.name() + "' errored (see log)"));
+            return 0;
+        }
+    }
+
+    private static Object readArg(ArgSpec arg, CommandContext<ServerCommandSource> bctx)
+            throws CommandSyntaxException {
+        return switch (arg.type()) {
+            case "word", "string" -> StringArgumentType.getString(bctx, arg.name());
+            case "int" -> StarlarkInt.of(IntegerArgumentType.getInteger(bctx, arg.name()));
+            case "float" -> StarlarkFloat.of(FloatArgumentType.getFloat(bctx, arg.name()));
+            case "bool" -> BoolArgumentType.getBool(bctx, arg.name());
+            case "player" -> playerView(EntityArgumentType.getPlayer(bctx, arg.name()));
+            default -> throw new IllegalStateException("unknown arg type " + arg.type());
+        };
+    }
+
+    private static CommandSourceView commandSource(ServerCommandSource source) {
+        ServerPlayerEntity player = source.getPlayer();
+        World world = source.getWorld();
+        return new CommandSourceView(
+                source.getName(),
+                player != null ? playerView(player) : null,
+                world != null ? levelView(world) : null,
+                message -> source.sendFeedback(() -> toMcText(message), false));
     }
 
     /** Reports the tags an item currently belongs to - handy for verifying scripted `tags`. */
@@ -316,6 +711,28 @@ public class Minelark implements ModInitializer {
                 log.info("The world is ready!")
 
             events.minelark.SERVER_STARTED.on(on_started)
+
+            # Greet players as they join, with a splash of colour.
+            def on_join(ctx):
+                ctx.player.tell(text("Welcome, ").append(text(ctx.player.name).color("gold").bold()))
+
+            events.minelark.PLAYER_JOINED.on(on_join)
+
+            # Chat is a mutable, cancellable event: block or rewrite the line.
+            def on_chat(ctx):
+                if "spam" in ctx.message:
+                    ctx.cancel()
+                else:
+                    ctx.message = ctx.message.upper()
+
+            events.minelark.PLAYER_CHAT.on(on_chat)
+
+            # Register your own command: /wave [who]. ctx.source ran it; ctx.args holds the arguments.
+            def cmd_wave(ctx):
+                who = ctx.args["who"]
+                ctx.source.tell(text(ctx.source.name + " waves at " + who).color("aqua"))
+
+            commands.register("wave", cmd_wave, args = [{"name": "who", "type": "word"}])
             """;
 
     private static final String DEFAULT_CLIENT_SCRIPT = """

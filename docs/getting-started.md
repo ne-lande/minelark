@@ -21,7 +21,7 @@ independent: if one throws, Minelark logs it and keeps going with the rest.
 | Folder | When it runs | What it's for |
 |---|---|---|
 | `startup/` | Once at launch, before the item/block registries freeze | Registering content |
-| `server/`  | On world load, and again on `/minelark reload` | Recipes, tags, events |
+| `server/`  | On world load, and again on `/minelark reload` | Recipes, events, commands |
 | `client/`  | Once when the client starts | Client-side hooks (coming) |
 
 Every phase gives you `print`, the [`log`](api/common.md) namespace, and
@@ -131,16 +131,46 @@ your callback takes the event context as `ctx`:
 
 ```python
 # server/events.star
-def on_started(ctx):
-    log.info("The world is ready!")
+def on_join(ctx):
+    ctx.player.tell(text("Welcome, ").append(text(ctx.player.name).color("gold")))
 
-events.minelark.SERVER_STARTED.on(on_started)
+def no_bedrock(ctx):
+    if ctx.block == "minecraft:bedrock":
+        ctx.cancel()
+
+events.minelark.PLAYER_JOINED.on(on_join)
+events.minelark.BLOCK_BROKEN.on(no_bedrock)
 ```
 
-Event names are typed, so a typo fails right away instead of quietly doing nothing. You can also
-`.add`, `.remove`, and `.list` handlers, or look one up by id with
-`events.of("minelark:server_started")`. There's one event so far; more are on the way. The
-[events reference](api/events.md) has the details.
+There's a spread of events - player join/leave/death/chat, block break/place, server tick, commands,
+explosions. Their `ctx` carries the relevant data (`ctx.player`, `ctx.block`, `ctx.x`, ...), some can
+be cancelled with `ctx.cancel()`, and a few fields can be rewritten in place (like a chat
+`ctx.message`). Event names are typed, so a typo fails right away instead of quietly doing nothing.
+The [events reference](api/events.md) lists them all, along with the player / level / item wrappers.
+
+## Styled text
+
+Messages can be plain strings or styled components built with `text(...)`:
+
+```python
+ctx.player.tell(text("Careful!").color("red").bold())
+```
+
+Chain `.color`, `.bold`, `.hover`, `.click_run`, `.append`, and more. See the
+[text reference](api/text.md).
+
+## Your own commands
+
+A `server/` script can register `/commands` that run your code:
+
+```python
+def cmd_heal(ctx):
+    ctx.source.tell(text("Healed!").color("green"))
+
+commands.register("heal", cmd_heal, permission = 2)
+```
+
+Arguments, permission levels, and the command `ctx` are in the [commands reference](api/commands.md).
 
 ## Sharing code with `load()`
 

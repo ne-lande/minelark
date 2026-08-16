@@ -59,10 +59,13 @@ public final class DocGenerator {
                     Recipes.class,
                     "recipes",
                     """
-                    Functions available to scripts in the **`minelark/server/`** folder. Server scripts
-                    declare reloadable data (currently recipes) and can be re-applied in-game with
-                    `/minelark reload`. Ids and tags without a namespace default to `minecraft:`;
-                    prefix a tag with `#`.
+                    The **`recipes`** namespace, available to scripts in the **`minelark/server/`** \
+                    folder. Recipes are reloadable data - re-apply them in-game with `/minelark \
+                    reload`. Ids and tags without a namespace default to `minecraft:`; prefix a tag \
+                    with `#`.
+
+                    Server scripts also react to [events](events.md), send styled [text](text.md), \
+                    and register their own [commands](commands.md).
                     """)
             // Note: the `events` API (docs/api/events.md) is hand-written - its nested
             // `events.<namespace>.<EVENT>` shape doesn't fit this flat generator.

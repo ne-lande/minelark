@@ -71,10 +71,24 @@ public final class Events implements StarlarkValue {
         return handlers.getOrDefault(id, List.of());
     }
 
-    /** Invokes every callback registered for {@code id}, passing a fresh {@link EventContext}. */
+    /** Whether any callback is registered for {@code id} - lets the adapter skip firing hot events. */
+    public boolean hasListeners(String id) {
+        List<StarlarkCallable> list = handlers.get(id);
+        return list != null && !list.isEmpty();
+    }
+
+    /** Invokes every callback registered for {@code id}, passing a fresh dataless {@link EventContext}. */
     public void fire(String id, ScriptLog sink) {
+        fire(id, new EventContext(id), sink);
+    }
+
+    /**
+     * Invokes every callback registered for {@code id}, passing the given {@code ctx}. The same
+     * {@code ctx} instance is shared across the callbacks, so mutations (cancellation, edited fields)
+     * accumulate and can be read back by the caller afterwards.
+     */
+    public void fire(String id, EventContext ctx, ScriptLog sink) {
         String source = "event:" + id;
-        EventContext ctx = new EventContext(id);
         for (StarlarkCallable callback : List.copyOf(listeners(id))) {
             log.setSource(source); // tag log.* inside the callback with the event
             try (Mutability mu = Mutability.create(source)) {

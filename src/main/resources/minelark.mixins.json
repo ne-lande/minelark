@@ -4,6 +4,9 @@
   "package": "ru.nelande.minelark.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "BlockItemMixin",
+    "CommandManagerMixin",
+    "ExplosionMixin",
     "ResourcePackManagerMixin"
   ],
   "injectors": {

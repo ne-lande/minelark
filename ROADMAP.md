@@ -80,10 +80,25 @@ write into the same pack.
 ### M5 - Events & runtime API *(KubeJS: events)*
 - ✅ **Java→Starlark callback bridge**: `events.on(name, fn)` registers callbacks that Minelark
   invokes on a fresh `StarlarkThread`. First event: `server_started`. Validated live.
-- ⏳ More events: player (join/leave/death/chat), block break/place, tick, command, explosion -
-  each passing a mutable `event` object to the callback.
-- ⏳ Text/component API (colours, hover/click, translation); richer custom commands.
-- Wrappers: entity, player, level, item stack.
+- ✅ More events: player (join/leave/death/chat), block break/place, server tick, command, explosion -
+  each passing a **mutable `ctx`** to the callback. Cancellable events expose `ctx.cancel()` /
+  `ctx.cancelled`; editable fields (chat `message`, `command`) are reassigned in place
+  (`ctx.message = ...`), backed by Starlark's `Structure` setField. Fabric-API-backed events are
+  wired directly; block-place/command/explosion have no Fabric event and use mixins
+  (`BlockItemMixin`, `CommandManagerMixin`, `ExplosionMixin`). Tier-1 tested; `command` + reload
+  validated live (headless summon is broken in the dev env, so block-place/explosion firing is
+  compile-validated + loads-clean only).
+- ✅ **Text/component API**: `text(content)` / `translate(key, args)` build an immutable `MineText`;
+  chain `.color/.bold/.italic/.underline/.strikethrough/.obfuscated/.hover/.click_*/.append`.
+  `ctx.player.tell(...)` takes a string or a component (adapter `toMcText`).
+- ✅ **Wrappers**: `PlayerView` (name, uuid, x/y/z, health, held_item, level + tell/give/teleport),
+  `LevelView`, `ItemStackView`, `EntityView` - all MC-agnostic. Wired: `ctx.level` on block/explosion,
+  `ctx.attacker` on death, `ctx.player.held_item`/`.level`.
+- ✅ **Richer custom commands**: `commands.register(name, handler, permission, args)` registers a
+  `/command` running a Starlark handler; args (word/string/int/float/bool/player), `ctx.source`
+  (player or console) + `ctx.args`. Re-registers on `/minelark reload`. Tier-1 tested + validated live.
+- ⏳ Text hover/click and translation validated by build/tests; live in-client rendering unverified
+  (headless has no client).
 
 ### M6 - Client scripts *(KubeJS: client)*
 - Client lifecycle/tick; tooltip & chat events; HUD/debug.

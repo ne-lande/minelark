@@ -35,10 +35,13 @@ public final class StarlarkHost {
         Log console = new Log(log);
         Recipes recipes = new Recipes();
         Events events = new Events(console);
-        ImmutableMap<String, Object> env =
-                environmentWith(console, Map.of("recipes", recipes, "events", events));
+        CommandsApi commands = new CommandsApi(console);
+        ImmutableMap<String, Object> env = environmentWith(
+                console,
+                Map.of("recipes", recipes, "events", events, "commands", commands),
+                new TextApi());
         int scripts = new ScriptEngine(serverDir, env, console, log).runAll();
-        return new ServerResult(recipes.recipes(), events, scripts);
+        return new ServerResult(recipes.recipes(), events, commands, scripts);
     }
 
     /**
