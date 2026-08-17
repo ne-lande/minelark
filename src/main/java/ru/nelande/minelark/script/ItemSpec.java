@@ -18,6 +18,10 @@ import java.util.List;
  * @param burnTime     furnace burn time in ticks; {@code > 0} registers the item as fuel, {@code 0} = not
  * @param displayName  the shown name; empty means use the default {@code item.minelark.<id>} translation
  * @param tags         resolved item-tag ids ({@code namespace:path}) this item should belong to
+ * @param toolType     tool kind ({@code pickaxe|axe|shovel|hoe|sword}); empty means not a tool
+ * @param toolTier     tool material tier ({@code wood|stone|iron|gold|diamond|netherite}); empty when not a tool
+ * @param armorSlot    armor slot ({@code helmet|chestplate|leggings|boots}); empty means not armor
+ * @param armorMaterial armor material ({@code leather|chainmail|iron|gold|diamond|netherite|turtle}); empty when not armor
  */
 public record ItemSpec(
         String id,
@@ -29,10 +33,25 @@ public record ItemSpec(
         double saturation,
         int burnTime,
         String displayName,
-        List<String> tags
+        List<String> tags,
+        String toolType,
+        String toolTier,
+        String armorSlot,
+        String armorMaterial
 ) {
     /** A plain stackable item with default rarity, no special flags, no name override, and no tags. */
     public static ItemSpec basic(String id, int maxStackSize) {
-        return new ItemSpec(id, maxStackSize, 0, Rarity.COMMON, false, 0, 0.0, 0, "", List.of());
+        return new ItemSpec(id, maxStackSize, 0, Rarity.COMMON, false, 0, 0.0, 0, "", List.of(),
+                "", "", "", "");
+    }
+
+    /** Whether this item is a tool (has a {@code toolType}). Tools use a handheld inventory model. */
+    public boolean isTool() {
+        return !toolType.isEmpty();
+    }
+
+    /** Whether this item is a piece of armor (has an {@code armorSlot}). */
+    public boolean isArmor() {
+        return !armorSlot.isEmpty();
     }
 }

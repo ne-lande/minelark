@@ -30,17 +30,30 @@ import net.minecraft.command.argument.IdentifierArgumentType;
 import net.minecraft.component.type.FoodComponent;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.item.ArmorItem;
+import net.minecraft.item.ArmorMaterial;
+import net.minecraft.item.ArmorMaterials;
+import net.minecraft.item.AxeItem;
 import net.minecraft.item.BlockItem;
+import net.minecraft.item.BucketItem;
+import net.minecraft.item.HoeItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemGroups;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.item.PickaxeItem;
+import net.minecraft.item.ShovelItem;
+import net.minecraft.item.SwordItem;
+import net.minecraft.item.ToolMaterial;
+import net.minecraft.item.ToolMaterials;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
+import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.sound.BlockSoundGroup;
 import net.minecraft.text.ClickEvent;
 import net.minecraft.text.HoverEvent;
 import net.minecraft.text.MutableText;
@@ -58,8 +71,15 @@ import net.starlark.java.eval.StarlarkFloat;
 import net.starlark.java.eval.StarlarkInt;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.nelande.minelark.api.MinelarkTypes;
+import ru.nelande.minelark.api.MinelarkTypesInitializer;
+import ru.nelande.minelark.api.Shape;
+import ru.nelande.minelark.fluid.ScriptFluid;
+import ru.nelande.minelark.fluid.ScriptFluidBlock;
 import ru.nelande.minelark.pack.GeneratedDataPack;
 import ru.nelande.minelark.script.BlockSpec;
+import ru.nelande.minelark.script.FluidSpec;
+import ru.nelande.minelark.script.TypeCatalog;
 import ru.nelande.minelark.script.ArgSpec;
 import ru.nelande.minelark.script.CommandSourceView;
 import ru.nelande.minelark.script.CommandSpec;
@@ -110,10 +130,18 @@ public class Minelark implements ModInitializer {
     public void onInitialize() {
         ensureScriptFolders();
 
+        // Register built-in content types, then let addon mods add their own, before scripts run.
+        MinelarkTypes.registerBuiltins();
+        invokeTypeAddons();
+        TypeCatalog catalog = new TypeCatalog(
+                MinelarkTypes.soundNames(), MinelarkTypes.toolTierNames(),
+                MinelarkTypes.shapeNames(), MinelarkTypes.armorMaterialNames());
+
         // Startup scripts run here, before the registries freeze, so they can register content.
-        startup = StarlarkHost.runStartup(scriptDir("startup"), SCRIPT_LOG);
+        startup = StarlarkHost.runStartup(scriptDir("startup"), catalog, SCRIPT_LOG);
         registerItems(startup.items());
         registerBlocks(startup.blocks());
+        registerFluids(startup.fluids());
 
         // Server scripts declare the reloadable data (recipes) and register event callbacks. Run
         // them now so the generated data pack is complete before any world loads its datapacks.
@@ -133,8 +161,26 @@ public class Minelark implements ModInitializer {
                 startup.items().size(), startup.blocks().size(), server.recipes().size());
     }
 
+    /** Invokes every addon's {@code minelark:types} entrypoint so it can register extra content types. */
+    private static void invokeTypeAddons() {
+        for (var entrypoint : FabricLoader.getInstance().getEntrypointContainers("minelark:types", MinelarkTypesInitializer.class)) {
+            String modId = entrypoint.getProvider().getMetadata().getId();
+            try {
+                entrypoint.getEntrypoint().registerMinelarkTypes();
+                LOGGER.info("Minelark: registered content types from '{}'", modId);
+            } catch (RuntimeException e) {
+                LOGGER.error("Minelark: '{}' failed to register content types", modId, e);
+            }
+        }
+    }
+
     /** The startup content, kept so {@code /minelark reload} can rebuild the pack with fresh recipes. */
-    private static StartupResult startup = new StartupResult(List.of(), List.of());
+    private static StartupResult startup = new StartupResult(List.of(), List.of(), List.of());
+
+    /** The registered startup content (items + blocks), for the client's resource-pack generation. */
+    public static StartupResult startupContent() {
+        return startup;
+    }
     /** The most recently loaded server-script event callbacks (replaced on load/reload). */
     private static Events serverEvents = new Events(new Log(SCRIPT_LOG), Events.Scope.SERVER);
     /** The most recently loaded server-script custom commands (replaced on load/reload). */
@@ -466,10 +512,7 @@ public class Minelark implements ModInitializer {
         List<Item> registered = new ArrayList<>();
         for (ItemSpec spec : specs) {
             Identifier id = Identifier.of(MOD_ID, spec.id());
-            Item.Settings settings = buildSettings(spec);
-            Item item = spec.displayName().isEmpty()
-                    ? new Item(settings)
-                    : new NamedItem(settings, Text.literal(spec.displayName()));
+            Item item = buildItem(spec);
             Registry.register(Registries.ITEM, id, item);
             if (spec.burnTime() > 0) {
                 FuelRegistry.INSTANCE.add(item, spec.burnTime());
@@ -498,8 +541,11 @@ public class Minelark implements ModInitializer {
                 int light = spec.luminance();
                 settings.luminance(state -> light);
             }
+            if (!spec.sound().isEmpty()) {
+                settings.sounds(blockSound(spec.sound()));
+            }
 
-            Block block = new Block(settings);
+            Block block = buildBlock(spec, settings);
             Registry.register(Registries.BLOCK, id, block);
             Item.Settings itemSettings = new Item.Settings();
             BlockItem blockItem = spec.displayName().isEmpty()
@@ -513,6 +559,141 @@ public class Minelark implements ModInitializer {
             ItemGroupEvents.modifyEntriesEvent(ItemGroups.BUILDING_BLOCKS)
                     .register(entries -> blockItems.forEach(entries::add));
         }
+    }
+
+    /** Builds the {@link Block} for a spec using the shape's registered factory, or a full cube. */
+    private static Block buildBlock(BlockSpec spec, AbstractBlock.Settings settings) {
+        if (spec.shape().isEmpty()) {
+            return new Block(settings);
+        }
+        Shape shape = MinelarkTypes.shape(spec.shape());
+        return shape != null ? shape.create(settings) : new Block(settings);
+    }
+
+    /** Registers each scripted fluid: a still + flowing fluid, a fluid block, and a filled bucket. */
+    private static void registerFluids(List<FluidSpec> specs) {
+        List<Item> buckets = new ArrayList<>();
+        for (FluidSpec spec : specs) {
+            Identifier id = Identifier.of(MOD_ID, spec.id());
+            Identifier flowingId = Identifier.of(MOD_ID, "flowing_" + spec.id());
+            Identifier bucketId = Identifier.of(MOD_ID, spec.id() + "_bucket");
+
+            ScriptFluid.Holder holder = new ScriptFluid.Holder();
+            ScriptFluid.Still still = new ScriptFluid.Still(holder);
+            ScriptFluid.Flowing flowing = new ScriptFluid.Flowing(holder);
+            // Link the still/flowing pair before registering, since registration queries getStill().
+            holder.still = still;
+            holder.flowing = flowing;
+            Registry.register(Registries.FLUID, id, still);
+            Registry.register(Registries.FLUID, flowingId, flowing);
+
+            AbstractBlock.Settings blockSettings = AbstractBlock.Settings.create()
+                    .replaceable().noCollision().dropsNothing().strength(100.0F);
+            if (spec.luminance() > 0) {
+                int light = spec.luminance();
+                blockSettings.luminance(state -> light);
+            }
+            ScriptFluidBlock block = new ScriptFluidBlock(still, blockSettings);
+            Registry.register(Registries.BLOCK, id, block);
+
+            Item.Settings bucketSettings = new Item.Settings().recipeRemainder(Items.BUCKET).maxCount(1);
+            BucketItem bucket = spec.displayName().isEmpty()
+                    ? new BucketItem(still, bucketSettings)
+                    : new NamedBucketItem(still, bucketSettings, Text.literal(spec.displayName()));
+            Registry.register(Registries.ITEM, bucketId, bucket);
+
+            holder.block = block;
+            holder.bucket = bucket;
+            buckets.add(bucket);
+            LOGGER.info("Registered fluid {} (+ bucket {})", id, bucketId);
+        }
+        if (!buckets.isEmpty()) {
+            ItemGroupEvents.modifyEntriesEvent(ItemGroups.INGREDIENTS)
+                    .register(entries -> buckets.forEach(entries::add));
+        }
+    }
+
+    /** A bucket item with a fixed display name (from a fluid's {@code display_name}). */
+    private static final class NamedBucketItem extends BucketItem {
+        private final Text name;
+
+        NamedBucketItem(net.minecraft.fluid.Fluid fluid, Item.Settings settings, Text name) {
+            super(fluid, settings);
+            this.name = name;
+        }
+
+        @Override
+        public Text getName() {
+            return name;
+        }
+
+        @Override
+        public Text getName(ItemStack stack) {
+            return name;
+        }
+    }
+
+    /** The {@link BlockSoundGroup} for a name (built-in or addon-registered), stone as the fallback. */
+    private static BlockSoundGroup blockSound(String name) {
+        BlockSoundGroup group = MinelarkTypes.sound(name);
+        return group != null ? group : BlockSoundGroup.STONE;
+    }
+
+    /** Builds the right {@link Item} for a spec: a tool, a piece of armor, or a plain (optionally named) item. */
+    private static Item buildItem(ItemSpec spec) {
+        if (spec.isTool()) {
+            ToolMaterial material = toolMaterial(spec.toolTier());
+            Item.Settings settings = new Item.Settings()
+                    .rarity(toMcRarity(spec.rarity()))
+                    .maxDamage(material.getDurability());
+            if (spec.fireproof()) {
+                settings.fireproof();
+            }
+            return switch (spec.toolType()) {
+                case "pickaxe" -> new PickaxeItem(material, settings);
+                case "axe" -> new AxeItem(material, settings);
+                case "shovel" -> new ShovelItem(material, settings);
+                case "hoe" -> new HoeItem(material, settings);
+                case "sword" -> new SwordItem(material, settings);
+                default -> new Item(settings);
+            };
+        }
+        if (spec.isArmor()) {
+            Item.Settings settings = new Item.Settings().rarity(toMcRarity(spec.rarity()));
+            if (spec.fireproof()) {
+                settings.fireproof();
+            }
+            return new ArmorItem(armorMaterial(spec.armorMaterial()), armorType(spec.armorSlot()), settings);
+        }
+        Item.Settings settings = buildSettings(spec);
+        return spec.displayName().isEmpty()
+                ? new Item(settings)
+                : new NamedItem(settings, Text.literal(spec.displayName()));
+    }
+
+    private static ToolMaterial toolMaterial(String tier) {
+        ToolMaterial material = MinelarkTypes.toolTier(tier);
+        return material != null ? material : ToolMaterials.IRON;
+    }
+
+    /** Resolves an armor material: a registered alias or any {@code namespace:id} from the registry. */
+    private static RegistryEntry<ArmorMaterial> armorMaterial(String material) {
+        RegistryEntry<ArmorMaterial> resolved = MinelarkTypes.resolveArmorMaterial(material);
+        if (resolved == null) {
+            LOGGER.warn("Minelark: unknown armor_material '{}'; falling back to iron", material);
+            return ArmorMaterials.IRON;
+        }
+        return resolved;
+    }
+
+    private static ArmorItem.Type armorType(String slot) {
+        return switch (slot) {
+            case "helmet" -> ArmorItem.Type.HELMET;
+            case "chestplate" -> ArmorItem.Type.CHESTPLATE;
+            case "leggings" -> ArmorItem.Type.LEGGINGS;
+            case "boots" -> ArmorItem.Type.BOOTS;
+            default -> ArmorItem.Type.HELMET;
+        };
     }
 
     private static Item.Settings buildSettings(ItemSpec spec) {
@@ -759,6 +940,19 @@ public class Minelark implements ModInitializer {
             block("marble", hardness = 1.5, resistance = 6.0, display_name = "Marble",
                   tags = ["minecraft:mineable/pickaxe"])
             block("ruby_ore", hardness = 3.0, display_name = "Ruby Ore", drops = ruby)
+
+            # Tools and armor take a material tier. Give them a texture at
+            # minelark/assets/minelark/textures/item/<id>.png.
+            item("ruby_pickaxe", tool_type = "pickaxe", tool_tier = "iron", display_name = "Ruby Pickaxe")
+            item("ruby_helmet", armor_slot = "helmet", armor_material = "iron", display_name = "Ruby Helmet")
+
+            # Blocks come in shapes; a "metal" sound group makes marble ring.
+            block("marble_slab", shape = "slab", display_name = "Marble Slab")
+            block("marble_stairs", shape = "stairs", display_name = "Marble Stairs")
+            block("chime", sound = "metal", display_name = "Chime Block")
+
+            # A custom fluid: needs acid_still and acid_flow textures under minelark/assets.
+            fluid("acid", luminance = 7, tint = "#66ff33")
             """;
 
     private static final String DEFAULT_SERVER_SCRIPT = """

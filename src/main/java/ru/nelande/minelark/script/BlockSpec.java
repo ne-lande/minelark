@@ -15,6 +15,8 @@ import java.util.List;
  * @param tags         resolved block-tag ids ({@code namespace:path}) this block should belong to
  * @param drops        what the block drops when broken: {@code ""} = itself, {@code "none"} = nothing,
  *                     otherwise a resolved item id ({@code namespace:path})
+ * @param sound        block sound group name (e.g. {@code "wood"}); empty means the stone default
+ * @param shape        block shape ({@code slab|stairs|fence|wall}); empty means a full cube
  */
 public record BlockSpec(
         String id,
@@ -24,10 +26,12 @@ public record BlockSpec(
         boolean requiresTool,
         String displayName,
         List<String> tags,
-        String drops
+        String drops,
+        String sound,
+        String shape
 ) {
     /** A plain block that drops itself, with modest strength and no other options. */
     public static BlockSpec basic(String id) {
-        return new BlockSpec(id, 1.0, 1.0, 0, false, "", List.of(), "");
+        return new BlockSpec(id, 1.0, 1.0, 0, false, "", List.of(), "", "", "");
     }
 }

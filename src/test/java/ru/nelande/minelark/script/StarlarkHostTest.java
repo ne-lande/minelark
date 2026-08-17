@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -242,6 +243,132 @@ class StarlarkHostTest {
         assertEquals(15, crystal.luminance());
         assertTrue(crystal.requiresTool());
         assertEquals(0.3, crystal.hardness(), 1e-6);
+    }
+
+    @Test
+    void collectsFluids(@TempDir Path dir) throws IOException {
+        write(dir, "f.star", """
+                fluid("acid", luminance = 7, tint = "#66ff33")
+                fluid("plain")
+                """);
+
+        List<FluidSpec> fluids = StarlarkHost.runStartup(dir, new TestLog()).fluids();
+
+        assertEquals(2, fluids.size());
+        assertEquals("acid", fluids.get(0).id());
+        assertEquals(7, fluids.get(0).luminance());
+        assertEquals(0x66ff33, fluids.get(0).tint());
+        assertEquals(0xffffff, fluids.get(1).tint());
+    }
+
+    @Test
+    void invalidFluidTintIsReported(@TempDir Path dir) throws IOException {
+        write(dir, "f.star", """
+                fluid("weird", tint = "greenish")
+                """);
+
+        TestLog log = new TestLog();
+        List<FluidSpec> fluids = StarlarkHost.runStartup(dir, log).fluids();
+
+        assertTrue(fluids.isEmpty());
+        assertTrue(log.anyMessageContains("must be a #rrggbb colour"), "got " + log.messages);
+    }
+
+    @Test
+    void collectsToolsAndArmor(@TempDir Path dir) throws IOException {
+        write(dir, "i.star", """
+                item("ruby_pickaxe", tool_type = "pickaxe", tool_tier = "diamond")
+                item("ruby_helmet", armor_slot = "helmet", armor_material = "iron")
+                """);
+
+        List<ItemSpec> items = StarlarkHost.runStartup(dir, new TestLog()).items();
+
+        assertTrue(items.get(0).isTool());
+        assertEquals("pickaxe", items.get(0).toolType());
+        assertEquals("diamond", items.get(0).toolTier());
+        assertTrue(items.get(1).isArmor());
+        assertEquals("helmet", items.get(1).armorSlot());
+        assertEquals("iron", items.get(1).armorMaterial());
+    }
+
+    @Test
+    void toolTypeWithoutTierIsReported(@TempDir Path dir) throws IOException {
+        write(dir, "i.star", """
+                item("broken_tool", tool_type = "pickaxe")
+                """);
+
+        TestLog log = new TestLog();
+        List<ItemSpec> items = StarlarkHost.runStartup(dir, log).items();
+
+        assertTrue(items.isEmpty());
+        assertTrue(log.anyMessageContains("tool_type and tool_tier must be set together"), "got " + log.messages);
+    }
+
+    @Test
+    void addonRegisteredTypeNameValidates(@TempDir Path dir) throws IOException {
+        // A live catalog (as the adapter builds from MinelarkTypes) makes addon names valid.
+        write(dir, "b.star", """
+                block("cog_block", sound = "create:cogs")
+                """);
+        TypeCatalog catalog = new TypeCatalog(Set.of("create:cogs"), Set.of(), Set.of(), Set.of());
+
+        TestLog log = new TestLog();
+        List<BlockSpec> blocks = StarlarkHost.runStartup(dir, catalog, log).blocks();
+
+        assertEquals(1, blocks.size(), "got " + log.messages);
+        assertEquals("create:cogs", blocks.get(0).sound());
+    }
+
+    @Test
+    void armorMaterialAcceptsRegistryId(@TempDir Path dir) throws IOException {
+        // Armor materials are registry-backed, so a mod's namespace:id validates (resolved by the adapter).
+        write(dir, "i.star", """
+                item("ruby_helm", armor_slot = "helmet", armor_material = "somemod:ruby")
+                """);
+
+        List<ItemSpec> items = StarlarkHost.runStartup(dir, new TestLog()).items();
+
+        assertEquals("somemod:ruby", items.get(0).armorMaterial());
+    }
+
+    @Test
+    void garbageArmorMaterialIsRejected(@TempDir Path dir) throws IOException {
+        write(dir, "i.star", """
+                item("bad", armor_slot = "helmet", armor_material = "notreal")
+                """);
+
+        TestLog log = new TestLog();
+        List<ItemSpec> items = StarlarkHost.runStartup(dir, log).items();
+
+        assertTrue(items.isEmpty());
+        assertTrue(log.anyMessageContains("armor_material 'notreal' is invalid"), "got " + log.messages);
+    }
+
+    @Test
+    void collectsBlockSoundAndShape(@TempDir Path dir) throws IOException {
+        write(dir, "b.star", """
+                block("chime", sound = "metal")
+                block("marble_slab", shape = "slab")
+                """);
+
+        List<BlockSpec> blocks = StarlarkHost.runStartup(dir, new TestLog()).blocks();
+
+        assertEquals("metal", blocks.get(0).sound());
+        assertEquals("", blocks.get(0).shape());
+        assertEquals("slab", blocks.get(1).shape());
+    }
+
+    @Test
+    void invalidSoundIsReportedNotThrown(@TempDir Path dir) throws IOException {
+        write(dir, "b.star", """
+                block("weird", sound = "kazoo")
+                """);
+
+        TestLog log = new TestLog();
+        List<BlockSpec> blocks = StarlarkHost.runStartup(dir, log).blocks();
+
+        assertTrue(blocks.isEmpty(), "an invalid sound should be rejected");
+        assertTrue(log.anyMessageContains("sound 'kazoo' is invalid"), "got " + log.messages);
     }
 
     @Test

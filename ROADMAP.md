@@ -56,7 +56,19 @@ behaviour is validated by JUnit tests, and everything ships through a CI/CD rele
 - ✅ `display_name` on items and blocks (runtime custom name - no language file needed).
 - ✅ `tags` on items and blocks, applied via the generated datapack subsystem (below); verifiable
   in-game with `/minelark tags <id>`.
-- ⏳ Block sound groups; tools/armor; slab/stair/fence/wall shapes; fluids; model/texture generation.
+- ✅ **Model/texture generation**: a second generated pack - a **client resource pack**
+  (`GeneratedResourcePack` + `AssetJson`, injected by the extended `ResourcePackManagerMixin`) writes
+  models/blockstates so scripted content stops being missing-texture. Authors drop PNGs (or override
+  JSON) into `minelark/assets/`. MC-free JSON is Tier-2 tested (`AssetJsonTest`).
+- ✅ **Block sound groups**: `block(sound=...)` (curated set -> `BlockSoundGroup`).
+- ✅ **Tools & armor**: `item(tool_type=, tool_tier=)` (pickaxe/axe/shovel/hoe/sword over the vanilla
+  material tiers) and `item(armor_slot=, armor_material=)`; handheld models for tools.
+- ✅ **Block shapes**: `block(shape="slab"|"stairs"|"fence"|"wall")` - real Slab/Stairs/Fence/Wall
+  blocks with vanilla-accurate generated blockstates/models and slab double-drop loot.
+- ✅ **Fluids**: `fluid(id, luminance=, tint=)` registers a still+flowing `FlowableFluid`, a fluid
+  block, and a bucket, with a client fluid render handler.
+- Spec collection is Tier-1 tested; the MC block/item/fluid/tool wiring is compile-validated and
+  live loads-clean on a headless server (registration confirmed; in-world rendering needs a client).
 
 ### ✅ Generated pack subsystem *(shared infra - unblocks tags, recipes, loot)*
 Minecraft has no runtime "add to tag / add recipe" API and Fabric only loads jar-bundled packs, so
@@ -134,6 +146,13 @@ write into the same pack.
   `RegistryAccess` interfaces (mirrors of `ClientAccess`); the adapter uses `FabricLoader` +
   `Registries`. Tier-1 tested (`InteropTest`) and validated live on a headless server (registries
   populated, mods listed). Docs auto-generated (`docs/api/{mods,registry}.md`).
+- ✅ **Content-type extension API**: mod-added types are handled two ways, both staying within the
+  curated design. Registry-backed types resolve by `namespace:id` automatically (armor materials, plus
+  the existing item/block/fluid/tag id passthrough). Non-registry types (sound groups, tool tiers,
+  block shapes) get a public `MinelarkTypes` API + a `minelark:types` Fabric entrypoint
+  (`MinelarkTypesInitializer`) so addon mods register more names; the valid-name set is threaded into
+  the script layer's fail-fast validation via a `TypeCatalog`. Rarity stays fixed (vanilla enum). See
+  `docs/extending.md`.
 - ⏳ JEI/REI hooks (need third-party soft deps + can't be Tier-1 tested; deferred).
 
 ### M8 - Multiloader *(future)*

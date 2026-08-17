@@ -5,8 +5,15 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
+import net.fabricmc.fabric.api.client.render.fluid.v1.FluidRenderHandlerRegistry;
+import net.fabricmc.fabric.api.client.render.fluid.v1.SimpleFluidRenderHandler;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.render.RenderLayer;
+import net.minecraft.fluid.Fluid;
+import net.minecraft.util.Identifier;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
@@ -26,9 +33,12 @@ import ru.nelande.minelark.script.ItemStackView;
 import ru.nelande.minelark.script.LevelView;
 import ru.nelande.minelark.script.Log;
 import ru.nelande.minelark.script.MineText;
+import ru.nelande.minelark.pack.GeneratedResourcePack;
+import ru.nelande.minelark.script.FluidSpec;
 import ru.nelande.minelark.script.PlayerActions;
 import ru.nelande.minelark.script.PlayerView;
 import ru.nelande.minelark.script.StarlarkHost;
+import ru.nelande.minelark.script.StartupResult;
 
 import java.util.List;
 import java.util.Map;
@@ -53,6 +63,13 @@ public final class MinelarkClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        // Build the client resource pack for the items/blocks the startup phase registered, so scripted
+        // content has real models/textures instead of the missing-texture placeholder.
+        StartupResult startup = Minelark.startupContent();
+        GeneratedResourcePack.generate(
+                FabricLoader.getInstance().getGameDir(), startup.items(), startup.blocks(), startup.fluids());
+        registerFluidRendering(startup.fluids());
+
         ClientResult result = StarlarkHost.runClient(
                 Minelark.scriptDir("client"), CLIENT_ACCESS,
                 Minelark.platformInfo(), Minelark.registryAccess(), Minelark.SCRIPT_LOG);
@@ -65,6 +82,19 @@ public final class MinelarkClient implements ClientModInitializer {
     /** The F3 debug lines to append to the vanilla overlay. Called by {@code DebugHudMixin}. */
     public static List<String> debugLines() {
         return debug.lines();
+    }
+
+    /** Wires up rendering for each scripted fluid: still/flow textures, tint, and a translucent layer. */
+    private static void registerFluidRendering(List<FluidSpec> fluids) {
+        for (FluidSpec spec : fluids) {
+            Fluid still = Registries.FLUID.get(Identifier.of(Minelark.MOD_ID, spec.id()));
+            Fluid flowing = Registries.FLUID.get(Identifier.of(Minelark.MOD_ID, "flowing_" + spec.id()));
+            Identifier stillTex = Identifier.of(Minelark.MOD_ID, "block/" + spec.id() + "_still");
+            Identifier flowTex = Identifier.of(Minelark.MOD_ID, "block/" + spec.id() + "_flow");
+            FluidRenderHandlerRegistry.INSTANCE.register(still, flowing,
+                    new SimpleFluidRenderHandler(stillTex, flowTex, spec.tint()));
+            BlockRenderLayerMap.INSTANCE.putFluids(RenderLayer.getTranslucent(), still, flowing);
+        }
     }
 
     private static void registerClientEvents() {

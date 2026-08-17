@@ -8,7 +8,7 @@ All content is registered under the **`minelark:`** namespace.
 
 ---
 
-## `block(id, hardness = 1.0, resistance = 1.0, luminance = 0, requires_tool = False, display_name = "", tags = [], drops = "")`
+## `block(id, hardness = 1.0, resistance = 1.0, luminance = 0, requires_tool = False, display_name = "", tags = [], drops = "", sound = "", shape = "")`
 
 Registers a new block (and a matching block item) under the `minelark:` namespace,
 adding the item to the Building Blocks creative tab.
@@ -19,9 +19,9 @@ block("marble", hardness = 1.5, resistance = 6.0)
 block("glow_crystal", luminance = 15, requires_tool = True)
 ```
 
-Models, textures, and loot tables are not generated yet, so the block shows the
-missing-texture placeholder and drops nothing. Invalid input is reported as a
-script error and skipped.
+Minelark generates the block's model, blockstate, and loot table; supply a texture
+at `minelark/assets/minelark/textures/block/<id>.png` (until then it shows the
+missing-texture placeholder). Invalid input is reported as a script error and skipped.
 
 **Parameters**
 
@@ -35,10 +35,36 @@ script error and skipped.
 | `display_name` | string | no | `""` | The block's shown name. Empty uses the default `block.minelark.<id>` translation. |
 | `tags` | any | no | `[]` | Block tags to join, e.g. `["minecraft:mineable/pickaxe"]`. A name without a namespace uses `c:`. |
 | `drops` | any | no | `""` | What the block drops when broken: empty = itself, `"none"` = nothing, or an item id. |
+| `sound` | string | no | `""` | Break/step sound group: stone (default), wood, gravel, grass, metal, glass, wool, sand, snow, ladder, anvil, slime, honey, bamboo, or nether. |
+| `shape` | string | no | `""` | Block shape: empty = full cube (default), or `slab`, `stairs`, `fence`, `wall`. |
 
 ---
 
-## `item(id, max_stack_size = 64, max_damage = 0, rarity = "common", fireproof = False, nutrition = 0, saturation = 0.0, burn_time = 0, display_name = "", tags = [])`
+## `fluid(id, display_name = "", luminance = 0, tint = "#ffffff")`
+
+Registers a custom fluid under the `minelark:` namespace: a still and flowing fluid, a
+fluid block, and a filled bucket (`minelark:<id>_bucket`).
+
+Example:
+```python
+fluid("acid", luminance = 7, tint = "#66ff33")
+```
+
+Fluids need a `<id>_still` and `<id>_flow` texture in the resource pack. Rendering can
+only be seen in-game (not on a headless server). Invalid input is reported and skipped.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `id` | string | yes | - | The fluid path (no namespace); registered as `minelark:<id>`. Must match `[a-z0-9_.-]`. |
+| `display_name` | string | no | `""` | The bucket's shown name. Empty uses the default translation. |
+| `luminance` | int | no | `0` | Light the fluid emits, from 0 to 15. |
+| `tint` | string | no | `"#ffffff"` | Colour applied to the fluid textures, as `#rrggbb` (default white). |
+
+---
+
+## `item(id, max_stack_size = 64, max_damage = 0, rarity = "common", fireproof = False, nutrition = 0, saturation = 0.0, burn_time = 0, display_name = "", tags = [], tool_type = "", tool_tier = "", armor_slot = "", armor_material = "")`
 
 Registers a new item under the `minelark:` namespace and adds it to the Ingredients creative tab.
 
@@ -56,7 +82,7 @@ item("ruby_sword", max_damage = 250, rarity = "rare")
 item("phoenix_feather", fireproof = True, rarity = "epic")
 ```
 
-The item's translation key is `item.minelark.<id>`. Models and textures are not generated yet, so items appear as the missing-texture placeholder. Invalid input (a malformed id, a stack size outside 1-99, or an unknown rarity) is reported as a script error and skipped.
+The item's translation key is `item.minelark.<id>`. Minelark generates the item's model; supply a texture at `minelark/assets/minelark/textures/item/<id>.png` (until then it shows the missing-texture placeholder). Invalid input (a malformed id, a stack size outside 1-99, or an unknown rarity) is reported as a script error and skipped.
 
 **Parameters**
 
@@ -72,6 +98,10 @@ The item's translation key is `item.minelark.<id>`. Models and textures are not 
 | `burn_time` | int | no | `0` | Furnace burn time in ticks. Above 0 registers the item as fuel (coal is 1600). |
 | `display_name` | string | no | `""` | The item's shown name. Empty uses the default `item.minelark.<id>` translation. |
 | `tags` | any | no | `[]` | Item tags to join, e.g. `["c:gems"]`. A name without a namespace uses `c:` (conventional). |
+| `tool_type` | string | no | `""` | Makes this a tool: `pickaxe`, `axe`, `shovel`, `hoe`, or `sword`. Requires `tool_tier`. |
+| `tool_tier` | string | no | `""` | Tool material: `wood`, `stone`, `iron`, `gold`, `diamond`, or `netherite`. Sets durability, mining level, and attack values. |
+| `armor_slot` | string | no | `""` | Makes this armor: `helmet`, `chestplate`, `leggings`, or `boots`. Requires `armor_material`. |
+| `armor_material` | string | no | `""` | Armor material: `leather`, `chainmail`, `iron`, `gold`, `diamond`, `netherite`, `turtle`, or any mod's armor-material id as `namespace:id`. |
 
 ---
 

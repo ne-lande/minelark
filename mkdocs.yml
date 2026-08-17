@@ -52,4 +52,5 @@ nav:
       - Commands: api/commands.md
       - Mods: api/mods.md
       - Registry: api/registry.md
+  - Extending from a mod: extending.md
   - Roadmap: roadmap.md

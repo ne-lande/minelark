@@ -20,11 +20,19 @@ public final class StarlarkHost {
      * the content they declared. Missing directories yield an empty result.
      */
     public static StartupResult runStartup(Path startupDir, ScriptLog log) {
-        StartupApi api = new StartupApi();
+        return runStartup(startupDir, TypeCatalog.VANILLA_DEFAULTS, log);
+    }
+
+    /**
+     * Like {@link #runStartup(Path, ScriptLog)}, but with a live {@link TypeCatalog} of valid
+     * sound/tool-tier/shape/armor-material names (built-in defaults plus addon-registered types).
+     */
+    public static StartupResult runStartup(Path startupDir, TypeCatalog catalog, ScriptLog log) {
+        StartupApi api = new StartupApi(catalog);
         Log console = new Log(log);
         ImmutableMap<String, Object> env = environment(console, api);
         new ScriptEngine(startupDir, env, console, log).runAll();
-        return new StartupResult(api.items(), api.blocks());
+        return new StartupResult(api.items(), api.blocks(), api.fluids());
     }
 
     /** Like {@link #runServer(Path, PlatformInfo, RegistryAccess, ScriptLog)} with no interop bridge. */

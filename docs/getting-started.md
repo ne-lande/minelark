@@ -50,9 +50,19 @@ Launch the game and check the log:
 You now have `minelark:ruby` and `minelark:sapphire`, and they show up in the Ingredients creative
 tab.
 
-One thing to know up front: Minelark doesn't generate models or textures yet, so new items and
-blocks render as the missing-texture placeholder. They work fine otherwise; textures are on the
-[roadmap](roadmap.md).
+One thing to know up front: Minelark generates the models and blockstates for your items and
+blocks, but not the textures - you supply those. Drop PNG files into a `minelark/assets/` folder
+that mirrors a normal resource pack, and Minelark serves them alongside the generated models:
+
+```
+<instance>/minelark/assets/minelark/textures/
+├── item/ruby.png          # for item("ruby")
+└── block/marble.png       # for block("marble")
+```
+
+Anything you put under `minelark/assets/` wins over the generated defaults, so you can also drop in
+your own models or blockstates to override what Minelark builds. Until you add a texture, the item
+or block shows the missing-texture placeholder but otherwise works.
 
 ### More options, and blocks
 

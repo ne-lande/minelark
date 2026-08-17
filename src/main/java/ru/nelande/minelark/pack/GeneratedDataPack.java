@@ -80,17 +80,26 @@ public final class GeneratedDataPack {
             Path file = dir.resolve("data").resolve(MOD_ID).resolve("loot_table").resolve("blocks")
                     .resolve(block.id() + ".json");
             Files.createDirectories(file.getParent());
-            Files.writeString(file, blockLootJson(block.id(), block.drops()));
+            Files.writeString(file, blockLootJson(block));
         }
     }
 
-    private static String blockLootJson(String blockId, String drops) {
+    private static String blockLootJson(BlockSpec block) {
+        String drops = block.drops();
         if (drops.equals("none")) {
             return "{\"type\":\"minecraft:block\"}";
         }
-        String item = drops.isEmpty() ? MOD_ID + ":" + blockId : drops;
+        String item = drops.isEmpty() ? MOD_ID + ":" + block.id() : drops;
+        // A shape may add loot functions for a self-drop (e.g. a slab yields two when it was double).
+        String functions = "";
+        if (drops.isEmpty() && !block.shape().isEmpty()) {
+            ShapeAssets shape = ShapeAssetRegistry.get(block.shape());
+            if (shape != null) {
+                functions = shape.selfDropLootFunctions(block.id());
+            }
+        }
         return "{\"type\":\"minecraft:block\",\"pools\":[{\"rolls\":1,"
-                + "\"entries\":[{\"type\":\"minecraft:item\",\"name\":\"" + item + "\"}],"
+                + "\"entries\":[{\"type\":\"minecraft:item\"," + functions + "\"name\":\"" + item + "\"}],"
                 + "\"conditions\":[{\"condition\":\"minecraft:survives_explosion\"}]}]}";
     }
 
