@@ -7,10 +7,13 @@ import net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.fabric.api.client.render.fluid.v1.FluidRenderHandlerRegistry;
 import net.fabricmc.fabric.api.client.render.fluid.v1.SimpleFluidRenderHandler;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.fluid.Fluid;
 import net.minecraft.util.Identifier;
@@ -24,11 +27,17 @@ import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Sequence;
 import net.starlark.java.eval.StarlarkList;
 import ru.nelande.minelark.Minelark;
+import ru.nelande.minelark.net.ScriptPayload;
 import ru.nelande.minelark.script.ClientAccess;
+import ru.nelande.minelark.script.ClientNetwork;
+import ru.nelande.minelark.script.ClientNetworkApi;
 import ru.nelande.minelark.script.ClientResult;
 import ru.nelande.minelark.script.DebugApi;
 import ru.nelande.minelark.script.EventContext;
 import ru.nelande.minelark.script.Events;
+import ru.nelande.minelark.script.HudAnchor;
+import ru.nelande.minelark.script.HudApi;
+import ru.nelande.minelark.script.HudElement;
 import ru.nelande.minelark.script.ItemStackView;
 import ru.nelande.minelark.script.LevelView;
 import ru.nelande.minelark.script.Log;
@@ -55,6 +64,17 @@ public final class MinelarkClient implements ClientModInitializer {
     private static Events clientEvents = new Events(new Log(Minelark.SCRIPT_LOG), Events.Scope.CLIENT);
     /** The F3 debug lines client scripts set, read by {@code DebugHudMixin}. */
     private static DebugApi debug = new DebugApi();
+    /** The on-screen HUD elements client scripts set, drawn by the {@code HudRenderCallback}. */
+    private static HudApi hud = new HudApi();
+    /** The client scripts' {@code net} channel handlers, fired when a server message arrives. */
+    private static ClientNetworkApi clientNetwork = new ClientNetworkApi(ClientNetwork.NOOP, new Log(Minelark.SCRIPT_LOG));
+
+    /** Puts a client {@code net.send} on the wire to the server. */
+    private static final ClientNetwork CLIENT_SENDER = (channel, json) -> {
+        if (ClientPlayNetworking.canSend(ScriptPayload.ID)) {
+            ClientPlayNetworking.send(new ScriptPayload(channel, json));
+        }
+    };
 
     // Chat edits are computed in the ALLOW_* pass and applied in the following MODIFY_* pass (same
     // message, same thread), so a thread-local carries the rewritten text between the two callbacks.
@@ -72,16 +92,62 @@ public final class MinelarkClient implements ClientModInitializer {
 
         ClientResult result = StarlarkHost.runClient(
                 Minelark.scriptDir("client"), CLIENT_ACCESS,
-                Minelark.platformInfo(), Minelark.registryAccess(), Minelark.SCRIPT_LOG);
+                Minelark.platformInfo(), Minelark.registryAccess(), CLIENT_SENDER, Minelark.SCRIPT_LOG);
         clientEvents = result.events();
         debug = result.debug();
+        hud = result.hud();
+        clientNetwork = result.network();
         registerClientEvents();
+        registerHudRendering();
+        registerNetworking();
         Minelark.LOGGER.info("Minelark client: {} script(s) loaded.", result.scriptCount());
+    }
+
+    /** Decodes server-to-client messages and fires the client scripts' {@code net.on} handlers. */
+    private static void registerNetworking() {
+        ClientPlayNetworking.registerGlobalReceiver(ScriptPayload.ID, (payload, context) -> {
+            if (!clientNetwork.hasListeners(payload.channel())) {
+                return;
+            }
+            context.client().execute(() ->
+                    clientNetwork.dispatch(payload.channel(), payload.data(), Minelark.SCRIPT_LOG));
+        });
     }
 
     /** The F3 debug lines to append to the vanilla overlay. Called by {@code DebugHudMixin}. */
     public static List<String> debugLines() {
         return debug.lines();
+    }
+
+    /** Draws the client scripts' {@code hud.text(...)} elements onto the screen each frame. */
+    private static void registerHudRendering() {
+        HudRenderCallback.EVENT.register((context, tickCounter) -> {
+            List<HudElement> elements = hud.elements();
+            if (elements.isEmpty()) {
+                return;
+            }
+            TextRenderer font = MinecraftClient.getInstance().textRenderer;
+            int screenW = context.getScaledWindowWidth();
+            int screenH = context.getScaledWindowHeight();
+            for (HudElement element : elements) {
+                Text text = Minelark.toMcText(element.content());
+                int width = font.getWidth(text);
+                int[] pos = position(element.anchor(), element.x(), element.y(),
+                        width, font.fontHeight, screenW, screenH);
+                context.drawText(font, text, pos[0], pos[1], element.color(), element.shadow());
+            }
+        });
+    }
+
+    /** Turns an anchor and offsets into an absolute (x, y), inset from the chosen screen edge/corner. */
+    private static int[] position(HudAnchor anchor, int x, int y, int width, int height, int screenW, int screenH) {
+        return switch (anchor) {
+            case TOP_LEFT -> new int[]{x, y};
+            case TOP_RIGHT -> new int[]{screenW - x - width, y};
+            case BOTTOM_LEFT -> new int[]{x, screenH - y - height};
+            case BOTTOM_RIGHT -> new int[]{screenW - x - width, screenH - y - height};
+            case CENTER -> new int[]{screenW / 2 - width / 2 + x, screenH / 2 - height / 2 + y};
+        };
     }
 
     /** Wires up rendering for each scripted fluid: still/flow textures, tint, and a translucent layer. */

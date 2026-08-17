@@ -18,8 +18,11 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
+import net.fabricmc.fabric.api.loot.v3.LootTableEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.registry.FuelRegistry;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.block.AbstractBlock;
@@ -46,6 +49,12 @@ import net.minecraft.item.ShovelItem;
 import net.minecraft.item.SwordItem;
 import net.minecraft.item.ToolMaterial;
 import net.minecraft.item.ToolMaterials;
+import net.minecraft.loot.LootPool;
+import net.minecraft.loot.condition.RandomChanceLootCondition;
+import net.minecraft.loot.entry.ItemEntry;
+import net.minecraft.loot.function.SetCountLootFunction;
+import net.minecraft.loot.provider.number.ConstantLootNumberProvider;
+import net.minecraft.loot.provider.number.UniformLootNumberProvider;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
 import net.minecraft.registry.entry.RegistryEntry;
@@ -61,6 +70,7 @@ import net.minecraft.text.Style;
 import net.minecraft.text.TextColor;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Rarity;
+import net.minecraft.util.WorldSavePath;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.text.Text;
@@ -91,6 +101,8 @@ import ru.nelande.minelark.script.LevelView;
 import ru.nelande.minelark.script.Log;
 import ru.nelande.minelark.script.Events;
 import ru.nelande.minelark.script.ItemSpec;
+import ru.nelande.minelark.script.LootDrop;
+import ru.nelande.minelark.script.LootInjectSpec;
 import ru.nelande.minelark.script.MineText;
 import ru.nelande.minelark.script.PlatformInfo;
 import ru.nelande.minelark.script.PlayerActions;
@@ -98,9 +110,13 @@ import ru.nelande.minelark.script.PlayerView;
 import ru.nelande.minelark.script.RegistryAccess;
 import ru.nelande.minelark.script.RecipeSpec;
 import ru.nelande.minelark.script.RemovalSpec;
+import ru.nelande.minelark.net.ScriptPayload;
 import ru.nelande.minelark.script.ScriptLog;
+import ru.nelande.minelark.script.ServerNetwork;
+import ru.nelande.minelark.script.ServerNetworkApi;
 import ru.nelande.minelark.script.ServerResult;
 import ru.nelande.minelark.script.StarlarkHost;
+import ru.nelande.minelark.script.Storage;
 import ru.nelande.minelark.script.StartupResult;
 
 import java.io.IOException;
@@ -110,6 +126,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.UUID;
 import java.util.Map;
 import java.util.Set;
 
@@ -149,14 +166,26 @@ public class Minelark implements ModInitializer {
         ServerResult server = reloadServerData();
 
         ServerLifecycleEvents.SERVER_STARTED.register(mc -> {
+            serverInstance = mc;   // so net.send/broadcast can reach players
+            // Bind the per-world / per-player stores to the loaded save before scripts react, so a
+            // server_started (or later join) callback can already read and write them.
+            bindWorldStorage(mc);
             serverEvents.fire("minelark:server_started", SCRIPT_LOG);
             long recipeCount = mc.getRecipeManager().values().stream()
                     .filter(entry -> entry.id().getNamespace().equals(MOD_ID))
                     .count();
             LOGGER.info("Minelark: {} recipe(s) active", recipeCount);
         });
+        ServerLifecycleEvents.SERVER_STOPPED.register(mc -> {
+            serverInstance = null;
+            // Detach so the next world load rebinds cleanly (the install-global store keeps its file).
+            serverWorldStorage.unbindWorld();
+            serverStorage.bindPlayerDir(null);
+        });
+        registerNetworking();
         registerRuntimeEvents();
         registerCommands();
+        registerLootModification();
 
         LOGGER.info("Minelark initialized with {} item(s), {} block(s), {} recipe(s).",
                 startup.items().size(), startup.blocks().size(), server.recipes().size());
@@ -192,6 +221,57 @@ public class Minelark implements ModInitializer {
      * reload} (which re-runs recipe loading) re-applies the current set.
      */
     private static volatile List<RemovalSpec> serverRecipeRemovals = List.of();
+    /** The most recently loaded loot-table injections (replaced on load/reload). Read by the
+     * {@code LootTableEvents.MODIFY} handler, which re-fires when datapacks reload. */
+    private static volatile List<LootInjectSpec> serverLootInjects = List.of();
+    /**
+     * The install-global {@code storage} store (one file-backed object reused across reloads). Also
+     * hands out per-player stores via {@code storage.player(uuid)}, kept with the loaded world save.
+     */
+    private static final Storage serverStorage =
+            new Storage(FabricLoader.getInstance().getGameDir().resolve(MOD_ID).resolve("storage.json"));
+    /**
+     * The per-world {@code world} store. Starts in-memory; {@link #bindWorldStorage} points it (and
+     * {@code storage.player(...)}) at the loaded world's save folder, so the data is isolated per
+     * world and per player. One object reused across reloads; detached on server stop.
+     */
+    private static final Storage serverWorldStorage = new Storage(null);
+    /** The most recently loaded server-script {@code net} handlers (replaced on load/reload). */
+    private static ServerNetworkApi serverNetwork = new ServerNetworkApi(ServerNetwork.NOOP, new Log(SCRIPT_LOG));
+    /** The running server, held so {@code net.send/broadcast} can reach players. Null when stopped. */
+    private static volatile MinecraftServer serverInstance;
+
+    /** Puts {@code net.send}/{@code net.broadcast} on the wire, addressing players on the live server. */
+    private static final ServerNetwork SERVER_SENDER = new ServerNetwork() {
+        @Override
+        public void sendToPlayer(String uuid, String channel, String json) {
+            MinecraftServer server = serverInstance;
+            if (server == null) {
+                return;
+            }
+            ServerPlayerEntity player;
+            try {
+                player = server.getPlayerManager().getPlayer(UUID.fromString(uuid));
+            } catch (IllegalArgumentException malformedUuid) {
+                return;
+            }
+            if (player != null) {
+                ServerPlayNetworking.send(player, new ScriptPayload(channel, json));
+            }
+        }
+
+        @Override
+        public void broadcast(String channel, String json) {
+            MinecraftServer server = serverInstance;
+            if (server == null) {
+                return;
+            }
+            ScriptPayload payload = new ScriptPayload(channel, json);
+            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                ServerPlayNetworking.send(player, payload);
+            }
+        }
+    };
 
     /** The active recipe-removal filters. Called by {@code RecipeManagerMixin}. */
     public static List<RemovalSpec> serverRecipeRemovals() {
@@ -201,12 +281,44 @@ public class Minelark implements ModInitializer {
     /** Re-runs server scripts and rewrites the generated data pack. Returns what was declared. */
     public static ServerResult reloadServerData() {
         ServerResult result = StarlarkHost.runServer(
-                scriptDir("server"), platformInfo(), registryAccess(), SCRIPT_LOG);
-        regeneratePack(result.recipes());
+                scriptDir("server"), platformInfo(), registryAccess(),
+                serverStorage, serverWorldStorage, SERVER_SENDER, SCRIPT_LOG);
+        regeneratePack(result);
         serverEvents = result.events();
         serverCommands = result.commands();
         serverRecipeRemovals = result.recipeRemovals();
+        serverLootInjects = result.lootInjects();
+        serverNetwork = result.network();
         return result;
+    }
+
+    /** Points the per-world and per-player stores at the loaded save (under {@code <world>/minelark/}). */
+    private static void bindWorldStorage(MinecraftServer mc) {
+        Path minelarkDir = mc.getSavePath(WorldSavePath.ROOT).resolve(MOD_ID);
+        serverWorldStorage.bindFile(minelarkDir.resolve("world.json"));
+        Path playersDir = minelarkDir.resolve("players");
+        serverWorldStorage.bindPlayerDir(playersDir);
+        serverStorage.bindPlayerDir(playersDir);
+    }
+
+    /**
+     * Registers the {@code net} payload (both directions) and the receiver for client-to-server
+     * messages, which decodes them and fires the current server scripts' {@code net.on} handlers on
+     * the server thread.
+     */
+    private static void registerNetworking() {
+        PayloadTypeRegistry.playS2C().register(ScriptPayload.ID, ScriptPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(ScriptPayload.ID, ScriptPayload.CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(ScriptPayload.ID, (payload, context) -> {
+            ServerNetworkApi net = serverNetwork;
+            if (!net.hasListeners(payload.channel())) {
+                return;
+            }
+            ServerPlayerEntity player = context.player();
+            MinecraftServer server = context.server();
+            server.execute(() ->
+                    net.dispatch(payload.channel(), payload.data(), playerView(player), SCRIPT_LOG));
+        });
     }
 
     /** The {@code mods} namespace's backing: reads the Fabric mod list. Shared with the client adapter. */
@@ -272,9 +384,54 @@ public class Minelark implements ModInitializer {
         };
     }
 
-    private static void regeneratePack(List<RecipeSpec> recipes) {
+    /**
+     * Applies script-declared {@code loot.inject(...)} additions: appends a pool to any loot table
+     * whose id matches, reading the current {@link #serverLootInjects} (swapped on reload, and MODIFY
+     * re-fires when datapacks reload, so injections re-apply).
+     */
+    private static void registerLootModification() {
+        LootTableEvents.MODIFY.register((key, tableBuilder, source, registries) -> {
+            List<LootInjectSpec> injects = serverLootInjects;
+            if (injects.isEmpty()) {
+                return;
+            }
+            String tableId = key.getValue().toString();
+            for (LootInjectSpec spec : injects) {
+                if (spec.tableId().equals(tableId)) {
+                    tableBuilder.pool(lootPool(spec.drops()));
+                }
+            }
+        });
+    }
+
+    /** Builds a one-roll loot pool from the parsed drops (count range + drop chance per entry). */
+    private static LootPool.Builder lootPool(List<LootDrop> drops) {
+        LootPool.Builder pool = LootPool.builder().rolls(ConstantLootNumberProvider.create(1));
+        for (LootDrop drop : drops) {
+            Identifier id = Identifier.tryParse(drop.itemId());
+            Item item = id == null ? Items.AIR : Registries.ITEM.get(id);
+            if (item == Items.AIR) {
+                LOGGER.warn("Minelark: loot.inject skipped unknown item '{}'", drop.itemId());
+                continue;
+            }
+            var entry = ItemEntry.builder(item);
+            if (drop.min() != 1 || drop.max() != 1) {
+                entry.apply(SetCountLootFunction.builder(drop.min() == drop.max()
+                        ? ConstantLootNumberProvider.create(drop.min())
+                        : UniformLootNumberProvider.create(drop.min(), drop.max())));
+            }
+            if (drop.chance() < 1.0) {
+                entry.conditionally(RandomChanceLootCondition.builder((float) drop.chance()));
+            }
+            pool.with(entry);
+        }
+        return pool;
+    }
+
+    private static void regeneratePack(ServerResult server) {
         GeneratedDataPack.generate(
-                FabricLoader.getInstance().getGameDir(), startup.items(), startup.blocks(), recipes);
+                FabricLoader.getInstance().getGameDir(), startup.items(), startup.blocks(),
+                server.recipes(), server.tags(), server.entityDrops(), server.datapackJson());
     }
 
     /**
@@ -984,15 +1141,29 @@ public class Minelark implements ModInitializer {
             if mods.loaded("minecraft") and registry.item_exists("diamond"):
                 log.info("Running on Minecraft with diamonds; " + str(len(mods.list())) + " mod(s) loaded.")
 
+            # Tags, loot, and generic datapack JSON (all reloadable):
+            tags.item("c:gems", ["minelark:ruby", "minelark:sapphire"])
+            loot.inject("minecraft:chests/simple_dungeon", [{"item": "minelark:ruby", "chance": 0.25}])
+            # datapack.json("minelark/predicate/example", {"condition": "minecraft:sunny"})
+
             # Run code when the world has finished loading. The callback receives the event `ctx`.
             def on_started(ctx):
                 log.info("The world is ready!")
 
             events.minelark.SERVER_STARTED.on(on_started)
 
-            # Greet players as they join, with a splash of colour.
+            # Greet players as they join, with a splash of colour. Three persistent scopes:
+            #   storage           - install-global (shared by every world),
+            #   world             - saved with this world,
+            #   storage.player(u) - per-world, per-player (u is usually ctx.player.uuid).
             def on_join(ctx):
-                ctx.player.tell(text("Welcome, ").append(text(ctx.player.name).color("gold").bold()))
+                joins = storage.get("joins", 0) + 1
+                storage.set("joins", joins)
+                me = storage.player(ctx.player.uuid)
+                mine = me.get("visits", 0) + 1
+                me.set("visits", mine)
+                ctx.player.tell(text("Welcome, ").append(text(ctx.player.name).color("gold").bold())
+                                .append(text(" (visit #" + str(mine) + ", visitor #" + str(joins) + ")")))
 
             events.minelark.PLAYER_JOINED.on(on_join)
 
@@ -1038,11 +1209,14 @@ public class Minelark implements ModInitializer {
 
             events.minelark.CLIENT_CHAT_RECEIVED.on(on_chat)
 
-            # Show your coordinates on the F3 debug screen. `client` reads the local player live.
+            # Show your coordinates two ways: on the F3 debug screen (`debug`) and always-on in the
+            # top-right corner of the screen (`hud`). `client` reads the local player live.
             def on_tick(ctx):
                 p = client.player
                 if p:
-                    debug.set("pos", str(int(p.x)) + ", " + str(int(p.y)) + ", " + str(int(p.z)))
+                    pos = str(int(p.x)) + ", " + str(int(p.y)) + ", " + str(int(p.z))
+                    debug.set("pos", pos)
+                    hud.text("pos", text(pos).color("aqua"), x = 4, y = 4, anchor = "top_right")
 
             events.minelark.CLIENT_TICK.on(on_tick)
             """;

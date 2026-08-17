@@ -35,33 +35,67 @@ public final class StarlarkHost {
         return new StartupResult(api.items(), api.blocks(), api.fluids());
     }
 
-    /** Like {@link #runServer(Path, PlatformInfo, RegistryAccess, ScriptLog)} with no interop bridge. */
+    /** Like the full {@code runServer} with no interop bridge and an in-memory (non-persistent) store. */
     public static ServerResult runServer(Path serverDir, ScriptLog log) {
-        return runServer(serverDir, PlatformInfo.EMPTY, RegistryAccess.EMPTY, log);
+        return runServer(serverDir, PlatformInfo.EMPTY, RegistryAccess.EMPTY, new Storage(null), log);
+    }
+
+    /** Like the full {@code runServer} with in-memory (non-persistent) stores and no live network. */
+    public static ServerResult runServer(
+            Path serverDir, PlatformInfo platform, RegistryAccess registry, ScriptLog log) {
+        return runServer(serverDir, platform, registry, new Storage(null), new Storage(null),
+                ServerNetwork.NOOP, log);
+    }
+
+    /** Like the full {@code runServer} with an in-memory (non-persistent) per-world store, no network. */
+    public static ServerResult runServer(
+            Path serverDir, PlatformInfo platform, RegistryAccess registry, Storage storage, ScriptLog log) {
+        return runServer(serverDir, platform, registry, storage, new Storage(null), ServerNetwork.NOOP, log);
+    }
+
+    /** Like the full {@code runServer} without a live network (a no-op {@code net} sender). */
+    public static ServerResult runServer(
+            Path serverDir, PlatformInfo platform, RegistryAccess registry,
+            Storage storage, Storage world, ScriptLog log) {
+        return runServer(serverDir, platform, registry, storage, world, ServerNetwork.NOOP, log);
     }
 
     /**
      * Runs the server phase (data generation + {@code /minelark reload}) and returns the reloadable
-     * content it declared (recipes, and later loot). The {@code platform}/{@code registry} bridge
-     * backs the {@code mods} and {@code registry} namespaces.
+     * content it declared (recipes, tags, loot, ...). The {@code platform}/{@code registry} bridge
+     * backs the {@code mods}/{@code registry} namespaces; {@code storage} is the install-global
+     * persistent store (and hands out per-player stores via {@code storage.player(...)}), {@code world}
+     * is the per-world store; {@code network} backs the {@code net} namespace.
      */
     public static ServerResult runServer(
-            Path serverDir, PlatformInfo platform, RegistryAccess registry, ScriptLog log) {
+            Path serverDir, PlatformInfo platform, RegistryAccess registry,
+            Storage storage, Storage world, ServerNetwork network, ScriptLog log) {
         Log console = new Log(log);
         Recipes recipes = new Recipes();
+        Tags tags = new Tags();
+        Loot loot = new Loot();
+        Datapack datapack = new Datapack();
         Events events = new Events(console, Events.Scope.SERVER);
         CommandsApi commands = new CommandsApi(console);
+        ServerNetworkApi net = new ServerNetworkApi(network, console);
         ImmutableMap<String, Object> env = environmentWith(
                 console,
-                Map.of(
-                        "recipes", recipes,
-                        "events", events,
-                        "commands", commands,
-                        "mods", new ModsApi(platform),
-                        "registry", new RegistryApi(registry)),
+                Map.ofEntries(
+                        Map.entry("recipes", recipes),
+                        Map.entry("tags", tags),
+                        Map.entry("loot", loot),
+                        Map.entry("datapack", datapack),
+                        Map.entry("storage", storage),
+                        Map.entry("world", world),
+                        Map.entry("net", net),
+                        Map.entry("events", events),
+                        Map.entry("commands", commands),
+                        Map.entry("mods", new ModsApi(platform)),
+                        Map.entry("registry", new RegistryApi(registry))),
                 new TextApi());
         int scripts = new ScriptEngine(serverDir, env, console, log).runAll();
-        return new ServerResult(recipes.recipes(), recipes.removals(), events, commands, scripts);
+        return new ServerResult(recipes.recipes(), recipes.removals(), tags.tags(), loot.entityDropSpecs(),
+                loot.injectSpecs(), datapack.jsonFiles(), events, commands, net, scripts);
     }
 
     /**
@@ -71,26 +105,37 @@ public final class StarlarkHost {
      * namespace (local player/world/actions, backed by {@code access}), and the {@code debug} namespace.
      */
     public static ClientResult runClient(Path clientDir, ClientAccess access, ScriptLog log) {
-        return runClient(clientDir, access, PlatformInfo.EMPTY, RegistryAccess.EMPTY, log);
+        return runClient(clientDir, access, PlatformInfo.EMPTY, RegistryAccess.EMPTY, ClientNetwork.NOOP, log);
     }
 
     /** Like {@link #runClient(Path, ClientAccess, ScriptLog)}, plus the {@code mods}/{@code registry} bridge. */
     public static ClientResult runClient(
             Path clientDir, ClientAccess access, PlatformInfo platform, RegistryAccess registry, ScriptLog log) {
+        return runClient(clientDir, access, platform, registry, ClientNetwork.NOOP, log);
+    }
+
+    /** Like the full {@code runClient}, plus a {@link ClientNetwork} backing the {@code net} namespace. */
+    public static ClientResult runClient(
+            Path clientDir, ClientAccess access, PlatformInfo platform, RegistryAccess registry,
+            ClientNetwork network, ScriptLog log) {
         Log console = new Log(log);
         Events events = new Events(console, Events.Scope.CLIENT);
         DebugApi debug = new DebugApi();
+        HudApi hud = new HudApi();
+        ClientNetworkApi net = new ClientNetworkApi(network, console);
         ImmutableMap<String, Object> env = environmentWith(
                 console,
                 Map.of(
                         "events", events,
                         "client", new ClientApi(access),
                         "debug", debug,
+                        "hud", hud,
+                        "net", net,
                         "mods", new ModsApi(platform),
                         "registry", new RegistryApi(registry)),
                 new TextApi());
         int scripts = new ScriptEngine(clientDir, env, console, log).runAll();
-        return new ClientResult(events, debug, scripts);
+        return new ClientResult(events, debug, hud, net, scripts);
     }
 
     /**

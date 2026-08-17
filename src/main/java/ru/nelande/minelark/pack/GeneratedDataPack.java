@@ -9,8 +9,11 @@ import net.minecraft.resource.ResourcePackSource;
 import net.minecraft.resource.ResourceType;
 import net.minecraft.text.Text;
 import ru.nelande.minelark.script.BlockSpec;
+import ru.nelande.minelark.script.DatapackJsonSpec;
+import ru.nelande.minelark.script.EntityDropSpec;
 import ru.nelande.minelark.script.ItemSpec;
 import ru.nelande.minelark.script.RecipeSpec;
+import ru.nelande.minelark.script.TagSpec;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -50,14 +53,30 @@ public final class GeneratedDataPack {
      * (Re)generates the data pack from the declared content. Call before the world's datapacks load.
      * If nothing needs generating, no pack is produced.
      */
-    public static void generate(Path gameDir, List<ItemSpec> items, List<BlockSpec> blocks, List<RecipeSpec> recipes) {
+    public static void generate(Path gameDir, List<ItemSpec> items, List<BlockSpec> blocks,
+                                List<RecipeSpec> recipes, List<TagSpec> extraTags,
+                                List<EntityDropSpec> entityDrops, List<DatapackJsonSpec> datapackJson) {
         Path dir = gameDir.resolve(MOD_ID).resolve(".generated").resolve("datapack");
         deleteRecursively(dir);
 
+        // Tags per registry kind: those derived from item()/block() specs, merged with explicit tags.
         Map<String, List<String>> itemTags = collectTags(items, ItemSpec::id, ItemSpec::tags);
         Map<String, List<String>> blockTags = collectTags(blocks, BlockSpec::id, BlockSpec::tags);
+        Map<String, List<String>> fluidTags = new LinkedHashMap<>();
+        Map<String, List<String>> entityTags = new LinkedHashMap<>();
+        for (TagSpec tag : extraTags) {
+            Map<String, List<String>> target = switch (tag.kind()) {
+                case "item" -> itemTags;
+                case "block" -> blockTags;
+                case "fluid" -> fluidTags;
+                default -> entityTags;  // "entity_type"
+            };
+            target.computeIfAbsent(tag.tag(), k -> new ArrayList<>()).addAll(tag.members());
+        }
 
-        if (itemTags.isEmpty() && blockTags.isEmpty() && recipes.isEmpty() && blocks.isEmpty()) {
+        boolean empty = itemTags.isEmpty() && blockTags.isEmpty() && fluidTags.isEmpty() && entityTags.isEmpty()
+                && recipes.isEmpty() && blocks.isEmpty() && entityDrops.isEmpty() && datapackJson.isEmpty();
+        if (empty) {
             packDir = null;
             return;
         }
@@ -67,12 +86,34 @@ public final class GeneratedDataPack {
             Files.writeString(dir.resolve("pack.mcmeta"), PACK_MCMETA);
             writeTagFiles(dir, "item", itemTags);
             writeTagFiles(dir, "block", blockTags);
+            writeTagFiles(dir, "fluid", fluidTags);
+            writeTagFiles(dir, "entity_type", entityTags);
             writeRecipeFiles(dir, recipes);
             writeBlockLoot(dir, blocks);
+            writeEntityDrops(dir, entityDrops);
+            writeDatapackJson(dir, datapackJson);
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to write Minelark generated data pack", e);
         }
         packDir = dir;
+    }
+
+    private static void writeEntityDrops(Path dir, List<EntityDropSpec> entityDrops) throws IOException {
+        for (EntityDropSpec spec : entityDrops) {
+            String[] parts = spec.entityId().split(":", 2);
+            Path file = dir.resolve("data").resolve(parts[0]).resolve("loot_table").resolve("entities")
+                    .resolve(parts[1] + ".json");
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, spec.json());
+        }
+    }
+
+    private static void writeDatapackJson(Path dir, List<DatapackJsonSpec> datapackJson) throws IOException {
+        for (DatapackJsonSpec spec : datapackJson) {
+            Path file = dir.resolve(spec.path());
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, spec.json());
+        }
     }
 
     private static void writeBlockLoot(Path dir, List<BlockSpec> blocks) throws IOException {

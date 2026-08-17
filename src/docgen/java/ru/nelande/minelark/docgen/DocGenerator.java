@@ -3,11 +3,16 @@ package ru.nelande.minelark.docgen;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.StarlarkInt;
+import ru.nelande.minelark.script.Datapack;
+import ru.nelande.minelark.script.HudApi;
 import ru.nelande.minelark.script.Log;
+import ru.nelande.minelark.script.Loot;
 import ru.nelande.minelark.script.ModsApi;
 import ru.nelande.minelark.script.Recipes;
 import ru.nelande.minelark.script.RegistryApi;
 import ru.nelande.minelark.script.StartupApi;
+import ru.nelande.minelark.script.Storage;
+import ru.nelande.minelark.script.Tags;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -96,6 +101,102 @@ public final class DocGenerator {
 
                     This is read-only discovery - a sandbox-preserving window onto the game's content, \
                     with no reflection into other mods.
+                    """),
+            new Phase(
+                    "Tags API Reference",
+                    "tags.md",
+                    Tags.class,
+                    "tags",
+                    """
+                    The **`tags`** namespace, available to scripts in the **`minelark/server/`** folder.
+                    Add any ids - vanilla, Minelark's, or another mod's - to item / block / fluid /
+                    entity tags. Written into the generated data pack, reloadable with `/minelark
+                    reload`. A bare tag name uses the conventional `c:` namespace; a bare member id
+                    defaults to `minecraft:`; a `#`-prefixed member includes another tag.
+                    """),
+            new Phase(
+                    "Loot API Reference",
+                    "loot.md",
+                    Loot.class,
+                    "loot",
+                    """
+                    The **`loot`** namespace, available to scripts in the **`minelark/server/`** folder.
+                    Replace what an entity drops, or inject extra drops into an existing loot table.
+                    Each drop is an item id, or a `{"item": id, "count": N or [min, max], "chance":
+                    0.0-1.0}` dict. Reloadable with `/minelark reload`.
+                    """),
+            new Phase(
+                    "Datapack API Reference",
+                    "datapack.md",
+                    Datapack.class,
+                    "datapack",
+                    """
+                    The **`datapack`** namespace, available to scripts in the **`minelark/server/`**
+                    folder. A generic escape hatch: write raw JSON files into Minelark's generated data
+                    pack for anything not modelled directly (advancements, predicates, dimensions,
+                    worldgen, ...). Reloadable with `/minelark reload`.
+                    """),
+            new Phase(
+                    "Storage API Reference",
+                    "storage.md",
+                    Storage.class,
+                    "storage",
+                    """
+                    Persistent key-value storage for scripts in the **`minelark/server/`** folder. A
+                    store survives `/minelark reload` and server restarts - handy from
+                    [event](events.md) callbacks (a join counter, a flag a command sets). Values are any
+                    JSON-able value (dict, list, string, number, bool, `None`); each change is saved to
+                    disk immediately.
+
+                    There are three scopes. **`storage`** and **`world`** are namespaces you call
+                    methods on directly; a per-player store is one you get from **`storage.player(uuid)`**.
+                    All three have the same `set` / `get` / `has` / `delete` / `keys` / `clear` methods
+                    (documented below with the `storage.` prefix - `world.set(...)` and
+                    `storage.player(u).set(...)` work identically):
+
+                    - **`storage`** - install-global, shared by every world (`<gamedir>/minelark/storage.json`).
+                    - **`world`** - saved with the current world, so it is isolated between worlds.
+                    - **`storage.player(uuid)`** - per-world **and** per-player (pass `ctx.player.uuid`).
+
+                    ```python
+                    def on_join(ctx):
+                        # install-global: shared by every world
+                        storage.set("total_joins", storage.get("total_joins", 0) + 1)
+
+                        # per-world: saved with this world
+                        world.set("last_player", ctx.player.name)
+
+                        # per-world AND per-player
+                        me = storage.player(ctx.player.uuid)
+                        me.set("visits", me.get("visits", 0) + 1)
+
+                    events.minelark.PLAYER_JOINED.on(on_join)
+                    ```
+
+                    `world` and `storage.player(...)` are only bound once a world has loaded, so use them
+                    from an event or command callback rather than at the top level of a script.
+                    """),
+            new Phase(
+                    "HUD API Reference",
+                    "hud.md",
+                    HudApi.class,
+                    "hud",
+                    """
+                    The **`hud`** namespace, available to scripts in the **`minelark/client/`** folder.
+                    Draw your own always-on text onto the game screen (the [debug](client.md) namespace,
+                    by contrast, only shows on the F3 overlay). Each element is keyed, so calling
+                    `hud.text(...)` again with the same key replaces it - set it from a
+                    [`CLIENT_TICK`](events.md) callback to keep it live.
+
+                    ```python
+                    def on_tick(ctx):
+                        p = client.player
+                        if p != None:
+                            hud.text("pos", text(str(int(p.x)) + " " + str(int(p.y)) + " " + str(int(p.z)))
+                                     .color("aqua"), x = 4, y = 4, anchor = "top_left")
+
+                    events.minelark.CLIENT_TICK.on(on_tick)
+                    ```
                     """)
             // Note: the `events` API (docs/api/events.md) is hand-written - its nested
             // `events.<namespace>.<EVENT>` shape doesn't fit this flat generator.

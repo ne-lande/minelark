@@ -4,9 +4,19 @@ import java.util.List;
 
 /**
  * Everything the server-phase scripts produced: the reloadable data (recipes and recipe-removal
- * filters), the registered event callbacks, the registered custom commands, and how many top-level
- * scripts ran.
+ * filters, explicit tags, entity-drop replacements, loot-table injections, generic datapack JSON),
+ * the registered event callbacks, the registered custom commands, the {@code net} channel handlers,
+ * and how many top-level scripts ran.
  */
-public record ServerResult(List<RecipeSpec> recipes, List<RemovalSpec> recipeRemovals, Events events,
-                           CommandsApi commands, int scriptCount) {
+public record ServerResult(
+        List<RecipeSpec> recipes,
+        List<RemovalSpec> recipeRemovals,
+        List<TagSpec> tags,
+        List<EntityDropSpec> entityDrops,
+        List<LootInjectSpec> lootInjects,
+        List<DatapackJsonSpec> datapackJson,
+        Events events,
+        CommandsApi commands,
+        ServerNetworkApi network,
+        int scriptCount) {
 }

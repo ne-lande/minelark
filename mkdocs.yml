@@ -46,7 +46,13 @@ nav:
       - Common (log): api/common.md
       - Startup: api/startup.md
       - Server (recipes): api/server.md
+      - Tags: api/tags.md
+      - Loot: api/loot.md
+      - Datapack: api/datapack.md
+      - Storage: api/storage.md
       - Client: api/client.md
+      - HUD: api/hud.md
+      - Networking: api/net.md
       - Events: api/events.md
       - Text: api/text.md
       - Commands: api/commands.md

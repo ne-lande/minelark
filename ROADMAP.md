@@ -40,7 +40,14 @@ behaviour is validated by JUnit tests, and everything ships through a CI/CD rele
 - ✅ `/minelark reload` re-runs server scripts (operator-only).
 - ✅ `console.info/warn/error` tagged with script name + level.
 - ✅ General engine + predeclared-globals framework (`ScriptEngine` + `StarlarkHost.environment`).
-- ⏳ Persistent data storage (deferred - most useful once event callbacks exist in M5).
+- ✅ **Persistent data storage**: three scoped key-value stores (server scripts), each with
+  `set/get/has/delete/keys/clear` and values that are any JSON-able Starlark value, flushed on every
+  change and surviving `/minelark reload` and restarts. **`storage`** is install-global
+  (`<gamedir>/minelark/storage.json`); **`world`** is saved with the world (`<world>/minelark/world.json`,
+  isolated between worlds); **`storage.player(uuid)`** is per-world and per-player
+  (`<world>/minelark/players/<uuid>.json`). The `world`/player stores bind to the save on server start
+  (one object reused across reloads, detached on stop). Tier-1 tested (`StorageTest`, incl. persistence
+  and isolation round-trips) and validated live (a boot counter incremented across two server runs).
 
 ### Documentation *(cross-cutting)*
 - Hand-written guide docs under `docs/` (getting started, language primer).
@@ -93,7 +100,17 @@ write into the same pack.
 ### M4 - Tags · Loot · Data *(KubeJS: server data)*
 - ✅ Item/block tags (M2). ✅ **Block loot**: `block(..., drops=...)` generates a block loot table
   (self-drop by default, `"none"`, or a specific item). Validated live.
-- ⏳ Entity drops, chest-loot injection; fluid/entity tags; generic datapack JSON.
+- ✅ **Generic tags**: `tags.item/block/fluid/entity(tag, members)` - add any ids (vanilla, Minelark's,
+  other mods') to any tag; merged with the `item()`/`block()` spec tags in the generated pack.
+- ✅ **Entity drops**: `loot.entity_drops(entity, drops)` replaces an entity's loot table
+  (`loot_table/entities/<id>.json`). **Loot injection**: `loot.inject(table, drops)` appends a pool to
+  an existing table (chests, ...) via `LootTableEvents.MODIFY`. Drops = item id or
+  `{item, count(=int or [min,max]), chance}`.
+- ✅ **Generic datapack JSON**: `datapack.json(path, obj)` writes arbitrary JSON into the pack
+  (Starlark value -> JSON), for anything unmodelled (advancements, predicates, ...).
+- Spec/JSON building is Tier-1/2 tested (`M4Test`); the loot-inject event wiring is compile-validated
+  and live loads-clean (tags applied + pack loads with no loot/tag errors; entity-drop firing needs
+  `/summon`, broken headless).
 
 ### M5 - Events & runtime API *(KubeJS: events)*
 - ✅ **Java→Starlark callback bridge**: `events.on(name, fn)` registers callbacks that Minelark
@@ -139,8 +156,20 @@ write into the same pack.
   with the `ALLOW_*` pass via a thread-local so callbacks fire once.
 - ✅ Tier-1 tested (`ClientScriptTest`, with a `FakeClient` for `ClientAccess`); MC-touching wiring is
   compile-validated + loads-clean only (the headless dev env has no client to smoke-test against).
-- ⏳ HUD rendering beyond the F3 overlay (drawing to the screen).
-- ⏳ Networking (server ↔ client) - advanced (the only path that could carry server events to a client).
+- ✅ **HUD rendering** beyond the F3 overlay: the `hud` namespace (client scripts) - `hud.text(key,
+  content, x=, y=, anchor=, color=, shadow=)` draws keyed, always-on text onto the screen (five
+  anchors: the four corners + center), `hud.remove`/`hud.clear`. Content is a string or a `text(...)`
+  component. Drawn via `HudRenderCallback`; keyed so a `CLIENT_TICK` callback can keep it live.
+  MC-agnostic collection is Tier-1 tested (`HudApiTest`); the draw call is compile-validated + loads
+  clean. Docs auto-generated (`docs/api/hud.md`).
+- ✅ **Networking** (server <-> client): the `net` namespace in both phases, riding one `CustomPayload`
+  (`ScriptPayload`, a channel name + a JSON string, registered on the play S2C/C2S channels). Server:
+  `net.send(player, channel, data)` / `net.broadcast(channel, data)` / `net.on(channel, handler)`;
+  client: `net.send(channel, data)` / `net.on(channel, handler)`. `data` is any JSON-able value; a
+  handler `ctx` carries `ctx.channel` / `ctx.data` (+ `ctx.player` on the server). This is the path
+  that carries a server's own "events" out to clients. Handlers are swapped on `/minelark reload` and
+  fired on the game thread. Channel dispatch + sends are Tier-1 tested (`NetworkTest`, fake senders);
+  the packet wiring is compile-validated + loads clean. Docs: hand-written `docs/api/net.md`.
 
 ### M7 - Interop & integrations
 - ✅ **Curated interop bridge (sandbox-preserving), mod-compat helpers**: `mods` +

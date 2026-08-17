@@ -3,11 +3,7 @@ package ru.nelande.minelark.script;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.EvalException;
-import net.starlark.java.eval.Mutability;
-import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkCallable;
-import net.starlark.java.eval.StarlarkSemantics;
-import net.starlark.java.eval.StarlarkThread;
 import net.starlark.java.eval.StarlarkValue;
 
 import java.util.ArrayList;
@@ -113,22 +109,6 @@ public final class Events implements StarlarkValue {
      * accumulate and can be read back by the caller afterwards.
      */
     public void fire(String id, EventContext ctx, ScriptLog sink) {
-        String source = "event:" + id;
-        for (StarlarkCallable callback : List.copyOf(listeners(id))) {
-            log.setSource(source); // tag log.* inside the callback with the event
-            try (Mutability mu = Mutability.create(source)) {
-                StarlarkThread thread = new StarlarkThread(mu, StarlarkSemantics.DEFAULT);
-                thread.setPrintHandler((t, message) -> sink.info("[" + source + "] " + message));
-                Starlark.call(thread, callback, List.of(ctx), Map.of());
-            } catch (EvalException e) {
-                sink.error("[" + source + "] " + e.getMessageWithStack());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                sink.error("[" + source + "] interrupted");
-                return;
-            } finally {
-                log.setSource("");
-            }
-        }
+        ScriptCallbacks.fire("event:" + id, List.copyOf(listeners(id)), ctx, log, sink);
     }
 }
