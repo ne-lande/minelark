@@ -111,7 +111,9 @@ import ru.nelande.minelark.script.PlayerView;
 import ru.nelande.minelark.script.RegistryAccess;
 import ru.nelande.minelark.script.RecipeSpec;
 import ru.nelande.minelark.script.RemovalSpec;
+import ru.nelande.minelark.console.ConsoleServer;
 import ru.nelande.minelark.net.ScriptPayload;
+import ru.nelande.minelark.script.ConsoleSession;
 import ru.nelande.minelark.script.ScriptLog;
 import ru.nelande.minelark.script.ServerNetwork;
 import ru.nelande.minelark.script.ServerNetworkApi;
@@ -174,6 +176,7 @@ public class Minelark implements ModInitializer {
             // Bind the per-world / per-player stores to the loaded save before scripts react, so a
             // server_started (or later join) callback can already read and write them.
             bindWorldStorage(mc);
+            startConsole(mc);
             serverEvents.fire("minelark:server_started", SCRIPT_LOG);
             long recipeCount = mc.getRecipeManager().values().stream()
                     .filter(entry -> entry.id().getNamespace().equals(MOD_ID))
@@ -182,6 +185,7 @@ public class Minelark implements ModInitializer {
         });
         ServerLifecycleEvents.SERVER_STOPPED.register(mc -> {
             serverInstance = null;
+            stopConsole();
             // Detach so the next world load rebinds cleanly (the install-global store keeps its file).
             serverWorldStorage.unbindWorld();
             serverStorage.bindPlayerDir(null);
@@ -242,6 +246,47 @@ public class Minelark implements ModInitializer {
     private static final Storage serverWorldStorage = new Storage(null);
     /** The most recently loaded server-script {@code net} handlers (replaced on load/reload). */
     private static ServerNetworkApi serverNetwork = new ServerNetworkApi(ServerNetwork.NOOP, new Log(SCRIPT_LOG));
+    /** Minelark's config (web console on/off + port), read once at class load. */
+    private static final MinelarkConfig config =
+            MinelarkConfig.load(FabricLoader.getInstance().getGameDir().resolve(MOD_ID).resolve("config.json"));
+    /** The web console's HTTP server while a server is running (null when off or stopped). */
+    private static ConsoleServer consoleServer;
+    /** The in-game console's REPL session (created once, so its state persists across evals). */
+    private static ConsoleSession serverConsole;
+
+    /** The persistent server console, built lazily against the live storage / registries. */
+    private static ConsoleSession serverConsole() {
+        if (serverConsole == null) {
+            serverConsole = StarlarkHost.newServerConsole(
+                    platformInfo(), registryAccess(), serverStorage, serverWorldStorage, SCRIPT_LOG);
+        }
+        return serverConsole;
+    }
+
+    /** Starts the web console (if enabled in the config) against the running server. */
+    private static void startConsole(MinecraftServer mc) {
+        if (!config.webConsoleEnabled) {
+            return;
+        }
+        try {
+            String token = UUID.randomUUID().toString().replace("-", "");
+            // The MinecraftServer is itself an Executor, so console evals hop onto the server thread.
+            consoleServer = new ConsoleServer(config.webConsolePort, token, serverConsole(), mc);
+            consoleServer.start();
+            LOGGER.info("Minelark web console: open {}", consoleServer.url());
+        } catch (IOException e) {
+            LOGGER.error("Minelark web console: could not start on port {}", config.webConsolePort, e);
+            consoleServer = null;
+        }
+    }
+
+    /** Stops the web console when the server stops. */
+    private static void stopConsole() {
+        if (consoleServer != null) {
+            consoleServer.stop();
+            consoleServer = null;
+        }
+    }
     /** The running server, held so {@code net.send/broadcast} can reach players. Null when stopped. */
     private static volatile MinecraftServer serverInstance;
 
@@ -1014,7 +1059,11 @@ public class Minelark implements ModInitializer {
                     .then(CommandManager.literal("tags")
                             .then(CommandManager.argument("item", IdentifierArgumentType.identifier())
                                     .executes(ctx -> reportItemTags(
-                                            ctx.getSource(), IdentifierArgumentType.getIdentifier(ctx, "item"))))));
+                                            ctx.getSource(), IdentifierArgumentType.getIdentifier(ctx, "item")))))
+                    .then(CommandManager.literal("eval")
+                            .then(CommandManager.argument("code", StringArgumentType.greedyString())
+                                    .executes(ctx -> evalConsole(
+                                            ctx.getSource(), StringArgumentType.getString(ctx, "code"))))));
 
             // Script-registered commands. This callback re-fires when `/minelark reload` reloads
             // resources, so added/removed/changed commands take effect on reload.
@@ -1130,6 +1179,19 @@ public class Minelark implements ModInitializer {
         source.sendFeedback(() -> Text.literal(
                 "Minelark: " + id + " is in " + (tags.isEmpty() ? "no tags" : String.join(", ", tags))), false);
         return tags.size();
+    }
+
+    /** Runs a snippet in the persistent server console and echoes its output to the command source. */
+    private static int evalConsole(ServerCommandSource source, String code) {
+        List<String> output = serverConsole().eval(code);
+        if (output.isEmpty()) {
+            source.sendFeedback(() -> Text.literal("minelark> ok"), false);
+        } else {
+            for (String line : output) {
+                source.sendFeedback(() -> Text.literal("minelark> " + line), false);
+            }
+        }
+        return output.size();
     }
 
     /** The {@code <gamedir>/minelark/<phase>} folder for a given lifecycle phase. */

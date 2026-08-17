@@ -120,6 +120,92 @@ re-runs every server script and tells you how many ran. `startup/` scripts regis
 the registries freeze, so those changes need a game restart. `client/` scripts run once at client
 start.
 
+## Live console
+
+`/minelark eval <code>` (operator only) runs a line of Starlark against the running game and prints
+the result - a REPL for poking at state without touching a file:
+
+```
+/minelark eval registry.item_exists("diamond")
+minelark> True
+/minelark eval count = 40
+minelark> ok
+/minelark eval count + 2
+minelark> 42
+```
+
+The session persists, so a variable or function you define on one line is there on the next. It sees
+the read/inspect surface - [`log`](api/common.md), [`storage`](api/storage.md), `world`,
+[`mods`](api/mods.md), [`registry`](api/registry.md) - plus `print` and [`text`](api/text.md). It is
+for inspecting and experimenting; registering content still goes through a `server/` script and
+`/minelark reload`. Works from the dedicated-server console too.
+
+### Web console
+
+For real editing - multiple lines, history, a proper keyboard - Minelark can serve a small web
+console. It is **off by default**; turn it on in `<gamedir>/minelark/config.json`:
+
+```json
+{
+  "web_console": {
+    "enabled": true,
+    "port": 25599
+  }
+}
+```
+
+When a world (or dedicated server) starts, Minelark logs a URL with a one-time token:
+
+```
+Minelark web console: open http://127.0.0.1:25599/?token=<...>
+```
+
+Open that in a browser and you get a code editor: type Starlark, press **Ctrl/Cmd+Enter** to run,
+and use **Up/Down** for history. It runs against the same live session as `/minelark eval` (same
+namespaces, same "rebind, don't mutate" rule below), evaluated on the server thread.
+
+It is meant to be safe to leave on for local development: it binds to `127.0.0.1` only (never your
+network), every request needs the token from that URL, and it runs sandboxed Starlark - so the reach
+is the console's curated API, not arbitrary Java. On a dedicated server, open it on the server
+machine, or forward the port over SSH; don't expose it publicly. If the game is paused (single
+player, escape menu) evals wait until you unpause.
+
+### Rebind, don't mutate
+
+There is one rule to know. A value you *created* on an earlier line is frozen by the time a later line
+sees it (Starlark freezes each run when it finishes). So carrying a list or dict across lines works if
+you **rebind the name** to a new value, but not if you **mutate the old one in place**:
+
+```python
+# DON'T - mutating a container from a previous line fails
+/minelark eval items = [1, 2]
+/minelark eval items.append(3)      # error: trying to mutate a frozen list
+
+# DO - rebind the name to a new list
+/minelark eval items = [1, 2]
+/minelark eval items = items + [3]  # ok -> [1, 2, 3]
+```
+
+```python
+# DON'T - same idea with a dict
+/minelark eval data = {"n": 1}
+/minelark eval data["n"] = 2        # error: trying to mutate a frozen dict
+
+# DO
+/minelark eval data = {"n": 1}
+/minelark eval data = dict(data, n = 2)   # ok
+```
+
+Two things are never a problem:
+
+- **Numbers, strings, and bools** are immutable anyway, so `count += 1` across lines always works.
+- **Mutating within a single line** is fine - the value is not frozen until that line finishes, so
+  `/minelark eval x = []; x.append(1); print(x)` prints `[1]`.
+
+For state you genuinely want to accumulate across lines (or across restarts), reach for
+[`storage`](api/storage.md) / `world`, which are live in the console:
+`storage.set("runs", storage.get("runs", 0) + 1)`.
+
 ## Recipes
 
 Recipes go in `server/` scripts, so they reload with `/minelark reload`:

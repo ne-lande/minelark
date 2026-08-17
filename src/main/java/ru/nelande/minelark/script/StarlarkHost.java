@@ -139,6 +139,28 @@ public final class StarlarkHost {
     }
 
     /**
+     * Builds a live REPL session for the in-game console ({@code /minelark eval}). It sees the
+     * server's read/inspect surface - {@code log}, {@code storage}, {@code world}, {@code mods},
+     * {@code registry}, and the {@code text}/{@code translate} builtins - plus {@code print}. Content
+     * registration ({@code recipes}, {@code events}, ...) is deliberately left out: those only take
+     * effect through a real script + {@code /minelark reload}, so exposing them in a REPL would just
+     * mislead.
+     */
+    public static ConsoleSession newServerConsole(
+            PlatformInfo platform, RegistryAccess registry, Storage storage, Storage world, ScriptLog log) {
+        Log console = new Log(log);
+        ImmutableMap<String, Object> env = environmentWith(
+                console,
+                Map.of(
+                        "storage", storage,
+                        "world", world,
+                        "mods", new ModsApi(platform),
+                        "registry", new RegistryApi(registry)),
+                new TextApi());
+        return new ConsoleSession(env);
+    }
+
+    /**
      * Builds the predeclared globals for a phase: the standard Starlark universe, the {@code console}
      * namespace, and the top-level builtins contributed by each API holder.
      */

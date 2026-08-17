@@ -50,11 +50,21 @@ plus the polish that makes Minelark pleasant to build on.
 
 ### N1 - In-game console (live, safe eval)
 
-An operator-gated REPL that evaluates Starlark against the running game: `/minelark eval <code>` and a
-dedicated console screen that keeps a **live, unfrozen module** so definitions persist between lines.
-Iterate on recipes, events, and HUD, and inspect state, with no reload cycle. This is a loaded gun in
-KubeJS (an eval that can `Java.loadClass`); in Minelark it is just a REPL against a sandbox, so it is
-safe to ship. Highest-leverage next feature, and it sharpens Minelark's own dev loop too.
+An operator-gated REPL that evaluates Starlark against the running game, keeping a **live, unfrozen
+module** so definitions persist between lines. This is a loaded gun in KubeJS (an eval that can
+`Java.loadClass`); in Minelark it is just a REPL against a sandbox, so it is safe to ship.
+
+- ✅ **Engine + command frontend.** `ConsoleSession` (MC-agnostic, Tier-1 tested) plus
+  `/minelark eval <code>`: state persists across lines, `print()` and trailing expressions are
+  echoed, errors are caught. Sees the read/inspect surface (`log`, `storage`, `world`, `mods`,
+  `registry`, `text`). Verified live on a headless server.
+- ✅ **Web console.** An opt-in loopback HTTP server (JDK built-in - no new dependency) serves a
+  browser code editor (multiline, history, Ctrl+Enter) that evaluates against the same session on the
+  server thread. Off by default, bound to `127.0.0.1`, token-guarded; works for dedicated servers too
+  (open locally or over an SSH tunnel). `ConsoleServer` is MC-agnostic and Tier-1 tested over real
+  HTTP; verified end-to-end against a live server. See `docs/getting-started.md`.
+- ⏳ **Editor polish.** Syntax highlighting + completion in the web editor - the natural home for the
+  N2 stubs-from-annotations work (one source of truth driving docs and console completion).
 
 ### N2 - Developer experience and tooling
 
