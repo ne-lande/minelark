@@ -16,6 +16,12 @@ your pack name (`"mypack/open_gui"`). Channel names may use letters, digits, and
     command), not at the top level of a script. On a single-player world the "server" and "client"
     are the same game, but the channel still works exactly the same way.
 
+    Sending the moment a player joins (from a `PLAYER_JOINED` handler) is fine: the client's channel
+    isn't ready that early, so Minelark holds the message and delivers it the instant the connection
+    is ready. Client scripts have no persistent state between callbacks (Starlark freezes a module
+    after it loads), so react to incoming messages rather than trying to remember things across
+    ticks - use `storage`/`world` on the server for that.
+
 ## Server scripts
 
 In `minelark/server/` scripts:

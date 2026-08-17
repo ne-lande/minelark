@@ -132,8 +132,9 @@ write into the same pack.
 - ✅ **Richer custom commands**: `commands.register(name, handler, permission, args)` registers a
   `/command` running a Starlark handler; args (word/string/int/float/bool/player), `ctx.source`
   (player or console) + `ctx.args`. Re-registers on `/minelark reload`. Tier-1 tested + validated live.
-- ⏳ Text hover/click and translation validated by build/tests; live in-client rendering unverified
-  (headless has no client).
+- ✅ Text hover/click and translation **verified live in a real client** (2026-08-17): styled text
+  renders, hovers show tooltips, and click actions run (note: vanilla blocks `run_command` for
+  signed-message commands like `/say` from click events - use a non-chat command or `click_suggest`).
 
 ### M6 - Client scripts *(KubeJS: client)*
 - ✅ **Client scripts get `events` + `text`/`translate`**: `runClient` now builds the same
@@ -160,16 +161,19 @@ write into the same pack.
   content, x=, y=, anchor=, color=, shadow=)` draws keyed, always-on text onto the screen (five
   anchors: the four corners + center), `hud.remove`/`hud.clear`. Content is a string or a `text(...)`
   component. Drawn via `HudRenderCallback`; keyed so a `CLIENT_TICK` callback can keep it live.
-  MC-agnostic collection is Tier-1 tested (`HudApiTest`); the draw call is compile-validated + loads
-  clean. Docs auto-generated (`docs/api/hud.md`).
+  MC-agnostic collection is Tier-1 tested (`HudApiTest`); **verified live in a real client**
+  (2026-08-17: all five anchors render on screen). Docs auto-generated (`docs/api/hud.md`).
 - ✅ **Networking** (server <-> client): the `net` namespace in both phases, riding one `CustomPayload`
   (`ScriptPayload`, a channel name + a JSON string, registered on the play S2C/C2S channels). Server:
   `net.send(player, channel, data)` / `net.broadcast(channel, data)` / `net.on(channel, handler)`;
   client: `net.send(channel, data)` / `net.on(channel, handler)`. `data` is any JSON-able value; a
   handler `ctx` carries `ctx.channel` / `ctx.data` (+ `ctx.player` on the server). This is the path
   that carries a server's own "events" out to clients. Handlers are swapped on `/minelark reload` and
-  fired on the game thread. Channel dispatch + sends are Tier-1 tested (`NetworkTest`, fake senders);
-  the packet wiring is compile-validated + loads clean. Docs: hand-written `docs/api/net.md`.
+  fired on the game thread. Sending the instant a player joins is handled: a send whose client channel
+  isn't ready yet (tracked via `S2CPlayChannelEvents.REGISTER`, since `canSend` reports ready too
+  early) is queued and flushed once the client registers the channel. Channel dispatch + sends are
+  Tier-1 tested (`NetworkTest`, fake senders); **verified live in a real client** (2026-08-17: both
+  directions + send-on-join round-tripped). Docs: hand-written `docs/api/net.md`.
 
 ### M7 - Interop & integrations
 - ✅ **Curated interop bridge (sandbox-preserving), mod-compat helpers**: `mods` +

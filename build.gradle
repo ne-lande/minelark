@@ -11,6 +11,26 @@ base {
     archivesName = project.archives_base_name
 }
 
+loom {
+    runs {
+        // NixOS: LWJGL's *bundled* libopenal.so fails to load. If a system libopenal.so is on
+        // LD_LIBRARY_PATH (the flake dev shell puts it there), point LWJGL at that absolute path
+        // instead. No-op on machines where no such lib is on the path, so the build stays portable
+        // (and CI, which never has it, is unaffected).
+        client {
+            def libPath = System.getenv("LD_LIBRARY_PATH")
+            if (libPath) {
+                def openal = libPath.split(File.pathSeparator)
+                        .collect { new File(it, "libopenal.so") }
+                        .find { it.exists() }
+                if (openal) {
+                    vmArg "-Dorg.lwjgl.openal.libname=${openal.absolutePath}"
+                }
+            }
+        }
+    }
+}
+
 sourceSets {
     // Build-only: generates the API reference from @StarlarkMethod annotations. Not shipped.
     docgen

@@ -21,6 +21,7 @@ import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
 import net.fabricmc.fabric.api.loot.v3.LootTableEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.S2CPlayChannelEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.fabricmc.fabric.api.registry.FuelRegistry;
@@ -126,9 +127,12 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Queue;
 import java.util.UUID;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class Minelark implements ModInitializer {
     public static final String MOD_ID = "minelark";
@@ -241,6 +245,49 @@ public class Minelark implements ModInitializer {
     /** The running server, held so {@code net.send/broadcast} can reach players. Null when stopped. */
     private static volatile MinecraftServer serverInstance;
 
+    /**
+     * A payload waiting for a client's channel to be ready. Sending right when a player joins (from a
+     * {@code PLAYER_JOINED} handler) is too early - the connection hasn't registered our channel yet,
+     * so Fabric drops the packet. Such sends are queued here and retried each server tick until the
+     * client can receive them (or the grace window expires). Concurrent because scripts may run off
+     * the server thread.
+     */
+    private record PendingSend(UUID uuid, ScriptPayload payload, int ttlTicks) {
+    }
+
+    private static final Queue<PendingSend> pendingSends = new ConcurrentLinkedQueue<>();
+    private static final int PENDING_TTL_TICKS = 200;   // ~10s for the connection to become ready
+
+    /**
+     * Players whose client has registered our channel and can actually receive on it. Populated from
+     * {@link S2CPlayChannelEvents#REGISTER} - {@code ServerPlayNetworking.canSend} reports ready too
+     * early (right at join it says yes but the packet is dropped), so we track real readiness here.
+     */
+    private static final Set<UUID> netReadyPlayers = ConcurrentHashMap.newKeySet();
+
+    /** Sends now if the player's client has registered our channel, else queues it for when it does. */
+    private static void sendOrQueue(MinecraftServer server, UUID uuid, ScriptPayload payload, int ttlTicks) {
+        if (netReadyPlayers.contains(uuid)) {
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(uuid);
+            if (player != null) {
+                ServerPlayNetworking.send(player, payload);
+            }
+        } else if (ttlTicks > 0) {
+            pendingSends.add(new PendingSend(uuid, payload, ttlTicks));
+        }
+    }
+
+    /** Retries queued sends whose client wasn't ready yet; called each server tick. */
+    private static void flushPendingSends(MinecraftServer server) {
+        for (int remaining = pendingSends.size(); remaining > 0; remaining--) {
+            PendingSend pending = pendingSends.poll();
+            if (pending == null) {
+                break;
+            }
+            sendOrQueue(server, pending.uuid(), pending.payload(), pending.ttlTicks() - 1);
+        }
+    }
+
     /** Puts {@code net.send}/{@code net.broadcast} on the wire, addressing players on the live server. */
     private static final ServerNetwork SERVER_SENDER = new ServerNetwork() {
         @Override
@@ -249,15 +296,13 @@ public class Minelark implements ModInitializer {
             if (server == null) {
                 return;
             }
-            ServerPlayerEntity player;
+            UUID id;
             try {
-                player = server.getPlayerManager().getPlayer(UUID.fromString(uuid));
+                id = UUID.fromString(uuid);
             } catch (IllegalArgumentException malformedUuid) {
                 return;
             }
-            if (player != null) {
-                ServerPlayNetworking.send(player, new ScriptPayload(channel, json));
-            }
+            sendOrQueue(server, id, new ScriptPayload(channel, json), PENDING_TTL_TICKS);
         }
 
         @Override
@@ -268,7 +313,7 @@ public class Minelark implements ModInitializer {
             }
             ScriptPayload payload = new ScriptPayload(channel, json);
             for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-                ServerPlayNetworking.send(player, payload);
+                sendOrQueue(server, player.getUuid(), payload, PENDING_TTL_TICKS);
             }
         }
     };
@@ -302,9 +347,9 @@ public class Minelark implements ModInitializer {
     }
 
     /**
-     * Registers the {@code net} payload (both directions) and the receiver for client-to-server
-     * messages, which decodes them and fires the current server scripts' {@code net.on} handlers on
-     * the server thread.
+     * Registers the {@code net} payload (both directions), the receiver for client-to-server messages
+     * (decoded and fired into the current server scripts' {@code net.on} handlers on the server
+     * thread), and the per-tick flush of sends that were queued because a client wasn't ready yet.
      */
     private static void registerNetworking() {
         PayloadTypeRegistry.playS2C().register(ScriptPayload.ID, ScriptPayload.CODEC);
@@ -318,6 +363,23 @@ public class Minelark implements ModInitializer {
             MinecraftServer server = context.server();
             server.execute(() ->
                     net.dispatch(payload.channel(), payload.data(), playerView(player), SCRIPT_LOG));
+        });
+        // A client just told the server which channels it can receive. Once ours is among them the
+        // player is truly ready, so mark them and flush anything queued while they were connecting
+        // (e.g. a message sent from their PLAYER_JOINED handler).
+        S2CPlayChannelEvents.REGISTER.register((handler, sender, server, channels) -> {
+            if (channels.contains(ScriptPayload.ID.id())) {
+                netReadyPlayers.add(handler.player.getUuid());
+                server.execute(() -> flushPendingSends(server));
+            }
+        });
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
+                netReadyPlayers.remove(handler.player.getUuid()));
+        // Backstop / GC: retry any still-queued sends each tick and let expired ones fall off.
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (!pendingSends.isEmpty()) {
+                flushPendingSends(server);
+            }
         });
     }
 
