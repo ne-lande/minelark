@@ -60,9 +60,12 @@ module** so definitions persist between lines. This is a loaded gun in KubeJS (a
   `registry`, `text`). Verified live on a headless server.
 - ✅ **Web console.** An opt-in loopback HTTP server (JDK built-in - no new dependency) serves a
   browser code editor (multiline, history, Ctrl+Enter) that evaluates against the same session on the
-  server thread. Off by default, bound to `127.0.0.1`, token-guarded; works for dedicated servers too
-  (open locally or over an SSH tunnel). `ConsoleServer` is MC-agnostic and Tier-1 tested over real
-  HTTP; verified end-to-end against a live server. See `docs/getting-started.md`.
+  server thread. A **developer feature, off by default** (`enabled` master switch); when on, an op
+  runs `/minelark console` to start it **on demand** and gets a clickable, token-carrying link
+  (`/minelark console stop` to close; `auto_start` for always-on). Bound to `127.0.0.1`,
+  token-guarded, sandboxed Starlark; remote admins forward the port over SSH. `ConsoleServer` is
+  MC-agnostic and Tier-1 tested over real HTTP; verified end-to-end against a live server. See
+  `docs/getting-started.md`.
 - ⏳ **Editor polish.** Syntax highlighting + completion in the web editor - the natural home for the
   N2 stubs-from-annotations work (one source of truth driving docs and console completion).
 

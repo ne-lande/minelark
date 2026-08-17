@@ -143,32 +143,38 @@ for inspecting and experimenting; registering content still goes through a `serv
 ### Web console
 
 For real editing - multiple lines, history, a proper keyboard - Minelark can serve a small web
-console. It is **off by default**; turn it on in `<gamedir>/minelark/config.json`:
+console. It is a **developer feature, off by default**. The `enabled` flag in
+`<gamedir>/minelark/config.json` is the master switch; leave it `false` on a production server and no
+one can start it.
 
 ```json
 {
   "web_console": {
-    "enabled": true,
+    "enabled": false,
+    "auto_start": false,
     "port": 25599
   }
 }
 ```
 
-When a world (or dedicated server) starts, Minelark logs a URL with a one-time token:
+With `enabled` set to `true`, an operator starts it on demand:
 
 ```
-Minelark web console: open http://127.0.0.1:25599/?token=<...>
+/minelark console
 ```
 
-Open that in a browser and you get a code editor: type Starlark, press **Ctrl/Cmd+Enter** to run,
-and use **Up/Down** for history. It runs against the same live session as `/minelark eval` (same
-namespaces, same "rebind, don't mutate" rule below), evaluated on the server thread.
+That spins up the server (only when asked - it is not left running otherwise) and sends you a
+**clickable link** carrying a one-time token. Click it and you get a code editor: type Starlark, press
+**Ctrl/Cmd+Enter** to run, **Up/Down** for history. It runs against the same live session as
+`/minelark eval` (same namespaces, same "rebind, don't mutate" rule below), evaluated on the server
+thread. Close it with `/minelark console stop`; it also stops when the server stops. Set
+`auto_start: true` if you would rather it come up with the server.
 
-It is meant to be safe to leave on for local development: it binds to `127.0.0.1` only (never your
-network), every request needs the token from that URL, and it runs sandboxed Starlark - so the reach
-is the console's curated API, not arbitrary Java. On a dedicated server, open it on the server
-machine, or forward the port over SSH; don't expose it publicly. If the game is paused (single
-player, escape menu) evals wait until you unpause.
+Security: it binds to `127.0.0.1` only (never your network), every request needs the token from the
+link, and it runs sandboxed Starlark - so the reach is the console's curated API, not arbitrary Java.
+Because it is loopback, on a **dedicated server** the link only works from the server machine itself;
+a remote operator should forward the port over SSH (`ssh -L 25599:127.0.0.1:25599 you@server`) rather
+than exposing it. If the game is paused (single player, escape menu) evals wait until you unpause.
 
 ### Rebind, don't mutate
 

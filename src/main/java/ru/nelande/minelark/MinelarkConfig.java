@@ -22,6 +22,7 @@ public final class MinelarkConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     public boolean webConsoleEnabled = false;
+    public boolean webConsoleAutoStart = false;
     public int webConsolePort = 25599;
 
     /** Reads the config at {@code file}, writing a default file first if none exists. */
@@ -44,6 +45,9 @@ public final class MinelarkConfig {
             if (console.has("enabled")) {
                 config.webConsoleEnabled = console.get("enabled").getAsBoolean();
             }
+            if (console.has("auto_start")) {
+                config.webConsoleAutoStart = console.get("auto_start").getAsBoolean();
+            }
             if (console.has("port")) {
                 config.webConsolePort = console.get("port").getAsInt();
             }
@@ -59,6 +63,7 @@ public final class MinelarkConfig {
     private JsonObject toJson() {
         JsonObject console = new JsonObject();
         console.addProperty("enabled", webConsoleEnabled);
+        console.addProperty("auto_start", webConsoleAutoStart);
         console.addProperty("port", webConsolePort);
         JsonObject root = new JsonObject();
         root.add("web_console", console);

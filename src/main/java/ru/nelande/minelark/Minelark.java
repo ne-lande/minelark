@@ -176,7 +176,9 @@ public class Minelark implements ModInitializer {
             // Bind the per-world / per-player stores to the loaded save before scripts react, so a
             // server_started (or later join) callback can already read and write them.
             bindWorldStorage(mc);
-            startConsole(mc);
+            if (config.webConsoleAutoStart) {
+                ensureConsoleStarted();   // otherwise an op starts it on demand with /minelark console
+            }
             serverEvents.fire("minelark:server_started", SCRIPT_LOG);
             long recipeCount = mc.getRecipeManager().values().stream()
                     .filter(entry -> entry.id().getNamespace().equals(MOD_ID))
@@ -263,10 +265,21 @@ public class Minelark implements ModInitializer {
         return serverConsole;
     }
 
-    /** Starts the web console (if enabled in the config) against the running server. */
-    private static void startConsole(MinecraftServer mc) {
+    /**
+     * Starts the web console against the running server if it is enabled and not already up, and
+     * returns it (or {@code null} if disabled / no server / it failed to bind). Idempotent, so both
+     * auto-start and {@code /minelark console} funnel through here.
+     */
+    private static ConsoleServer ensureConsoleStarted() {
         if (!config.webConsoleEnabled) {
-            return;
+            return null;
+        }
+        if (consoleServer != null) {
+            return consoleServer;
+        }
+        MinecraftServer mc = serverInstance;
+        if (mc == null) {
+            return null;
         }
         try {
             String token = UUID.randomUUID().toString().replace("-", "");
@@ -274,9 +287,11 @@ public class Minelark implements ModInitializer {
             consoleServer = new ConsoleServer(config.webConsolePort, token, serverConsole(), mc);
             consoleServer.start();
             LOGGER.info("Minelark web console: open {}", consoleServer.url());
+            return consoleServer;
         } catch (IOException e) {
             LOGGER.error("Minelark web console: could not start on port {}", config.webConsolePort, e);
             consoleServer = null;
+            return null;
         }
     }
 
@@ -1063,7 +1078,17 @@ public class Minelark implements ModInitializer {
                     .then(CommandManager.literal("eval")
                             .then(CommandManager.argument("code", StringArgumentType.greedyString())
                                     .executes(ctx -> evalConsole(
-                                            ctx.getSource(), StringArgumentType.getString(ctx, "code"))))));
+                                            ctx.getSource(), StringArgumentType.getString(ctx, "code")))))
+                    .then(CommandManager.literal("console")
+                            .executes(ctx -> openConsole(ctx.getSource()))
+                            .then(CommandManager.literal("stop").executes(ctx -> {
+                                boolean wasRunning = consoleServer != null;
+                                stopConsole();
+                                ctx.getSource().sendFeedback(() -> Text.literal(wasRunning
+                                        ? "Minelark: web console stopped"
+                                        : "Minelark: web console was not running"), false);
+                                return 1;
+                            }))));
 
             // Script-registered commands. This callback re-fires when `/minelark reload` reloads
             // resources, so added/removed/changed commands take effect on reload.
@@ -1179,6 +1204,30 @@ public class Minelark implements ModInitializer {
         source.sendFeedback(() -> Text.literal(
                 "Minelark: " + id + " is in " + (tags.isEmpty() ? "no tags" : String.join(", ", tags))), false);
         return tags.size();
+    }
+
+    /** Starts the web console on demand and hands the caller a clickable link (with its token). */
+    private static int openConsole(ServerCommandSource source) {
+        if (!config.webConsoleEnabled) {
+            source.sendError(Text.literal("Minelark web console is off. It is a developer feature - "
+                    + "set web_console.enabled to true in minelark/config.json to allow it."));
+            return 0;
+        }
+        ConsoleServer server = ensureConsoleStarted();
+        if (server == null) {
+            source.sendError(Text.literal("Minelark: could not start the web console (see the log)."));
+            return 0;
+        }
+        String url = server.url();
+        Text link = Text.literal("[Open Minelark console]").setStyle(Style.EMPTY
+                .withColor(Formatting.AQUA)
+                .withUnderline(true)
+                .withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, url))
+                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal(url))));
+        source.sendFeedback(() -> link, false);
+        source.sendFeedback(() -> Text.literal("(loopback only - on a remote server open it on the "
+                + "server machine, or forward the port over SSH)"), false);
+        return 1;
     }
 
     /** Runs a snippet in the persistent server console and echoes its output to the command source. */
