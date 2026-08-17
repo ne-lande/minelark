@@ -34,6 +34,7 @@ public final class Recipes implements StarlarkValue {
     private static final Pattern PATH = Pattern.compile("[a-z0-9_./-]+");
 
     private final List<RecipeSpec> recipes = new ArrayList<>();
+    private final List<RemovalSpec> removals = new ArrayList<>();
     private int counter = 0;
 
     @StarlarkMethod(
@@ -171,7 +172,121 @@ public final class Recipes implements StarlarkValue {
         record(name, recipe);
     }
 
+    @StarlarkMethod(
+            name = "campfire",
+            doc = "Adds a campfire cooking recipe (the slow, food-oriented cook over a campfire).",
+            parameters = {
+                    @Param(name = "result", doc = "The output item id."),
+                    @Param(name = "ingredient", doc = "The input item or `#tag` id."),
+                    @Param(name = "experience", named = true, positional = false, defaultValue = "0.0",
+                            doc = "Experience granted."),
+                    @Param(name = "cooking_time", named = true, positional = false, defaultValue = "100",
+                            doc = "Cooking time in ticks."),
+            })
+    public void campfire(Object result, Object ingredient, Object experience, StarlarkInt cookingTime)
+            throws EvalException {
+        cooking("campfire", "minecraft:campfire_cooking", result, ingredient, experience, cookingTime);
+    }
+
+    @StarlarkMethod(
+            name = "stonecutting",
+            doc = "Adds a stonecutter recipe: one input turns into `count` copies of the result.",
+            parameters = {
+                    @Param(name = "result", doc = "The output item id."),
+                    @Param(name = "ingredient", doc = "The input item or `#tag` id."),
+                    @Param(name = "count", named = true, positional = false, defaultValue = "1",
+                            doc = "How many result items are produced."),
+            })
+    public void stonecutting(Object result, Object ingredient, StarlarkInt count) throws EvalException {
+        JsonObject recipe = new JsonObject();
+        recipe.addProperty("type", "minecraft:stonecutting");
+        recipe.add("ingredient", ingredient(ingredient));
+        recipe.add("result", result(result, count.toIntUnchecked()));
+        record("stonecutting", recipe);
+    }
+
+    @StarlarkMethod(
+            name = "smithing",
+            doc = "Adds a smithing transform recipe (the smithing table upgrade, e.g. diamond -> netherite). "
+                    + "`template`, `base`, and `addition` are each an item or `#tag`.",
+            parameters = {
+                    @Param(name = "result", doc = "The output item id."),
+                    @Param(name = "template", doc = "The smithing template item/`#tag` id (the top-left slot)."),
+                    @Param(name = "base", doc = "The base item/`#tag` id being upgraded."),
+                    @Param(name = "addition", doc = "The addition item/`#tag` id (the material added)."),
+            })
+    public void smithing(Object result, Object template, Object base, Object addition) throws EvalException {
+        JsonObject recipe = new JsonObject();
+        recipe.addProperty("type", "minecraft:smithing_transform");
+        recipe.add("template", ingredient(template));
+        recipe.add("base", ingredient(base));
+        recipe.add("addition", ingredient(addition));
+        JsonObject resultObject = new JsonObject();
+        resultObject.addProperty("id", idOf(result));
+        recipe.add("result", resultObject);
+        record("smithing", recipe);
+    }
+
+    @StarlarkMethod(
+            name = "remove",
+            doc = "Removes existing recipes that match a filter dict. Give any subset of: `id` (an exact "
+                    + "recipe id, bare defaults to minecraft:), `mod` (a namespace), `type` (a recipe type "
+                    + "id like \"minecraft:crafting_shaped\"), `input` (an ingredient item or `#tag` id the "
+                    + "recipe uses), or `output` (the result item id). All given keys must match. To replace "
+                    + "a recipe, call remove(...) then add a new one with the same output.",
+            parameters = {
+                    @Param(name = "filter", doc = "A dict with any of `id`, `mod`, `type`, `input`, `output`."),
+            })
+    public void remove(Object filter) throws EvalException {
+        Dict<?, ?> dict = dict("remove() filter", filter);
+        String id = null;
+        String mod = null;
+        String type = null;
+        String input = null;
+        String output = null;
+        for (Map.Entry<?, ?> entry : dict.entrySet()) {
+            if (!(entry.getKey() instanceof String key)) {
+                throw error("recipes.remove() filter keys must be strings");
+            }
+            String value = filterString(key, entry.getValue());
+            switch (key) {
+                case "id" -> id = resolveId(value);
+                case "mod" -> mod = namespace(value);
+                case "type" -> type = resolveId(value);
+                case "input" -> input = value.startsWith("#")
+                        ? resolveId(value.substring(1))
+                        : resolveId(value);
+                case "output" -> output = resolveId(value);
+                default -> throw error("recipes.remove() unknown filter key '" + key
+                        + "'; use id, mod, type, input, or output");
+            }
+        }
+        if (id == null && mod == null && type == null && input == null && output == null) {
+            throw error("recipes.remove() needs at least one of id, mod, type, input, output");
+        }
+        removals.add(new RemovalSpec(id, mod, type, input, output));
+    }
+
     // --- helpers ---
+
+    private static String filterString(String key, Object value) throws EvalException {
+        if (value instanceof Ref ref) {
+            return ref.id();
+        }
+        if (value instanceof String string) {
+            return string;
+        }
+        throw error("recipes.remove() filter '" + key + "' must be an id string or handle");
+    }
+
+    /** Validates a bare namespace (for the `mod` filter). */
+    private static String namespace(String raw) throws EvalException {
+        String value = raw.trim();
+        if (!NAMESPACE.matcher(value).matches()) {
+            throw error("invalid namespace '" + raw + "'");
+        }
+        return value;
+    }
 
     private void record(String type, JsonObject recipe) {
         recipes.add(new RecipeSpec(type + "/" + (counter++), GSON.toJson(recipe)));
@@ -263,5 +378,10 @@ public final class Recipes implements StarlarkValue {
     /** The recipes declared so far. */
     public List<RecipeSpec> recipes() {
         return List.copyOf(recipes);
+    }
+
+    /** The recipe-removal filters declared so far. */
+    public List<RemovalSpec> removals() {
+        return List.copyOf(removals);
     }
 }

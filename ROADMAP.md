@@ -82,7 +82,13 @@ write into the same pack.
 - ✅ Add: shaped, shapeless, smelting/blasting/smoking (via the `recipes` namespace in server
   scripts), reloadable with `/minelark reload` (regenerates the pack + `reloadResources`). Live-validated.
 - ✅ Ingredient support: items and `#tags`; bare names default to `minecraft:`; result counts.
-- ⏳ campfire, stonecutting, smithing; remove/replace existing recipes by filter (id/mod/type/in/out).
+- ✅ **More recipe types**: `recipes.campfire`, `recipes.stonecutting`, `recipes.smithing`
+  (smithing_transform) - same generated-datapack path, Tier-2 tested against the exact 1.21.1 JSON.
+- ✅ **Remove/replace by filter**: `recipes.remove({id|mod|type|input|output})` (fields ANDed) drops
+  matching recipes at load via a `RecipeManagerMixin` (rebuilds the immutable `recipesByType`/
+  `recipesById` at `apply` TAIL, reading filters swapped on `/minelark reload`). Replace = remove + add.
+  Filter matching is MC-agnostic + Tier-2 tested (`RemovalSpec`); removal is live-validated on a
+  headless server (a vanilla recipe dropped, and re-dropped on reload).
 
 ### M4 - Tags · Loot · Data *(KubeJS: server data)*
 - ✅ Item/block tags (M2). ✅ **Block loot**: `block(..., drops=...)` generates a block loot table

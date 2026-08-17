@@ -76,6 +76,77 @@ class ServerScriptTest {
     }
 
     @Test
+    void stonecuttingRecipeIsSerialised(@TempDir Path dir) throws IOException {
+        write(dir, "r.star", """
+                recipes.stonecutting("minelark:marble_slab", "minelark:marble", count = 2)
+                """);
+
+        List<RecipeSpec> recipes = run(dir, new TestLog());
+        String json = recipes.get(0).json();
+        assertTrue(json.contains("\"type\":\"minecraft:stonecutting\""), json);
+        assertTrue(json.contains("\"item\":\"minelark:marble\""), json);
+        assertTrue(json.contains("\"id\":\"minelark:marble_slab\""), json);
+        assertTrue(json.contains("\"count\":2"), json);
+    }
+
+    @Test
+    void campfireRecipeIsSerialised(@TempDir Path dir) throws IOException {
+        write(dir, "r.star", """
+                recipes.campfire("minelark:cooked_gem", "minelark:raw_gem", experience = 0.35, cooking_time = 600)
+                """);
+
+        List<RecipeSpec> recipes = run(dir, new TestLog());
+        String json = recipes.get(0).json();
+        assertTrue(json.contains("\"type\":\"minecraft:campfire_cooking\""), json);
+        assertTrue(json.contains("\"cookingtime\":600"), json);
+        assertTrue(json.contains("\"experience\":0.35"), json);
+    }
+
+    @Test
+    void smithingRecipeIsSerialised(@TempDir Path dir) throws IOException {
+        write(dir, "r.star", """
+                recipes.smithing("minelark:mythril_sword", "#minelark:templates", "minecraft:diamond_sword", "minelark:mythril")
+                """);
+
+        List<RecipeSpec> recipes = run(dir, new TestLog());
+        String json = recipes.get(0).json();
+        assertTrue(json.contains("\"type\":\"minecraft:smithing_transform\""), json);
+        assertTrue(json.contains("\"tag\":\"minelark:templates\""), json);
+        assertTrue(json.contains("\"base\":{\"item\":\"minecraft:diamond_sword\"}"), json);
+        assertTrue(json.contains("\"addition\":{\"item\":\"minelark:mythril\"}"), json);
+        assertTrue(json.contains("\"id\":\"minelark:mythril_sword\""), json);
+    }
+
+    @Test
+    void removeCollectsFilters(@TempDir Path dir) throws IOException {
+        write(dir, "r.star", """
+                recipes.remove({"output": "minecraft:torch"})
+                recipes.remove({"mod": "minecraft", "type": "minecraft:crafting_shapeless"})
+                """);
+
+        TestLog log = new TestLog();
+        List<RemovalSpec> removals = StarlarkHost.runServer(dir, log).recipeRemovals();
+
+        assertEquals(2, removals.size(), "got " + log.messages);
+        assertEquals("minecraft:torch", removals.get(0).output());
+        assertEquals("minecraft", removals.get(1).mod());
+        assertEquals("minecraft:crafting_shapeless", removals.get(1).type());
+    }
+
+    @Test
+    void removeWithNoKeysIsReported(@TempDir Path dir) throws IOException {
+        write(dir, "r.star", """
+                recipes.remove({})
+                """);
+
+        TestLog log = new TestLog();
+        List<RemovalSpec> removals = StarlarkHost.runServer(dir, log).recipeRemovals();
+
+        assertTrue(removals.isEmpty());
+        assertTrue(log.anyMessageContains("at least one of"), "got " + log.messages);
+    }
+
+    @Test
     void eventCallbackFiresWithCtx(@TempDir Path dir) throws IOException {
         write(dir, "e.star", """
                 def greet(ctx):

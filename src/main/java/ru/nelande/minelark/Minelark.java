@@ -97,6 +97,7 @@ import ru.nelande.minelark.script.PlayerActions;
 import ru.nelande.minelark.script.PlayerView;
 import ru.nelande.minelark.script.RegistryAccess;
 import ru.nelande.minelark.script.RecipeSpec;
+import ru.nelande.minelark.script.RemovalSpec;
 import ru.nelande.minelark.script.ScriptLog;
 import ru.nelande.minelark.script.ServerResult;
 import ru.nelande.minelark.script.StarlarkHost;
@@ -185,6 +186,17 @@ public class Minelark implements ModInitializer {
     private static Events serverEvents = new Events(new Log(SCRIPT_LOG), Events.Scope.SERVER);
     /** The most recently loaded server-script custom commands (replaced on load/reload). */
     private static CommandsApi serverCommands = new CommandsApi(new Log(SCRIPT_LOG));
+    /**
+     * The most recently loaded recipe-removal filters (replaced on load/reload). Read by
+     * {@code RecipeManagerMixin} after vanilla builds its recipe collection, so {@code /minelark
+     * reload} (which re-runs recipe loading) re-applies the current set.
+     */
+    private static volatile List<RemovalSpec> serverRecipeRemovals = List.of();
+
+    /** The active recipe-removal filters. Called by {@code RecipeManagerMixin}. */
+    public static List<RemovalSpec> serverRecipeRemovals() {
+        return serverRecipeRemovals;
+    }
 
     /** Re-runs server scripts and rewrites the generated data pack. Returns what was declared. */
     public static ServerResult reloadServerData() {
@@ -193,6 +205,7 @@ public class Minelark implements ModInitializer {
         regeneratePack(result.recipes());
         serverEvents = result.events();
         serverCommands = result.commands();
+        serverRecipeRemovals = result.recipeRemovals();
         return result;
     }
 

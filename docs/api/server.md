@@ -23,6 +23,33 @@ Adds a blast furnace recipe (usually half the smelting time).
 
 ---
 
+## `recipes.campfire(result, ingredient, experience = 0.0, cooking_time = 100)`
+
+Adds a campfire cooking recipe (the slow, food-oriented cook over a campfire).
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `result` | any | yes | - | The output item id. |
+| `ingredient` | any | yes | - | The input item or `#tag` id. |
+| `experience` | any | no | `0.0` | Experience granted. |
+| `cooking_time` | int | no | `100` | Cooking time in ticks. |
+
+---
+
+## `recipes.remove(filter)`
+
+Removes existing recipes that match a filter dict. Give any subset of: `id` (an exact recipe id, bare defaults to minecraft:), `mod` (a namespace), `type` (a recipe type id like "minecraft:crafting_shaped"), `input` (an ingredient item or `#tag` id the recipe uses), or `output` (the result item id). All given keys must match. To replace a recipe, call remove(...) then add a new one with the same output.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `filter` | any | yes | - | A dict with any of `id`, `mod`, `type`, `input`, `output`. |
+
+---
+
 ## `recipes.shaped(result, pattern, key, count = 1)`
 
 Adds a shaped crafting recipe. `pattern` is 1-3 rows of up to 3 characters; `key` maps each character to an item or `#tag`. A space means an empty slot.
@@ -67,6 +94,21 @@ Adds a furnace smelting recipe.
 
 ---
 
+## `recipes.smithing(result, template, base, addition)`
+
+Adds a smithing transform recipe (the smithing table upgrade, e.g. diamond -> netherite). `template`, `base`, and `addition` are each an item or `#tag`.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `result` | any | yes | - | The output item id. |
+| `template` | any | yes | - | The smithing template item/`#tag` id (the top-left slot). |
+| `base` | any | yes | - | The base item/`#tag` id being upgraded. |
+| `addition` | any | yes | - | The addition item/`#tag` id (the material added). |
+
+---
+
 ## `recipes.smoking(result, ingredient, experience = 0.0, cooking_time = 100)`
 
 Adds a smoker recipe (for food).
@@ -79,6 +121,20 @@ Adds a smoker recipe (for food).
 | `ingredient` | any | yes | - | The input item or `#tag` id. |
 | `experience` | any | no | `0.0` | Experience granted. |
 | `cooking_time` | int | no | `100` | Cooking time in ticks. |
+
+---
+
+## `recipes.stonecutting(result, ingredient, count = 1)`
+
+Adds a stonecutter recipe: one input turns into `count` copies of the result.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `result` | any | yes | - | The output item id. |
+| `ingredient` | any | yes | - | The input item or `#tag` id. |
+| `count` | int | no | `1` | How many result items are produced. |
 
 ---
 

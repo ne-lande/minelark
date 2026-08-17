@@ -61,7 +61,7 @@ public final class StarlarkHost {
                         "registry", new RegistryApi(registry)),
                 new TextApi());
         int scripts = new ScriptEngine(serverDir, env, console, log).runAll();
-        return new ServerResult(recipes.recipes(), events, commands, scripts);
+        return new ServerResult(recipes.recipes(), recipes.removals(), events, commands, scripts);
     }
 
     /**
