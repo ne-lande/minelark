@@ -10,11 +10,16 @@ launch the game with Minelark installed:
 <instance>/minelark/
 ├── startup/   # runs once at launch, before registries freeze: items, blocks
 ├── server/    # runs on world load and /minelark reload: recipes, events
-└── client/    # runs once on client start: tooltips, client chat, HUD, the client tick
+├── client/    # runs once on client start: tooltips, client chat, HUD, the client tick
+└── push/      # client scripts a server sends to connecting players (off by default)
 ```
 
 Any file ending in `.star` inside a phase folder gets run, in alphabetical order. Scripts are
 independent: if one throws, Minelark logs it and keeps going with the rest.
+
+The `push/` folder is a separate feature: a server can ship the client scripts in it to the players
+who connect, so a HUD or tooltip travels with the server. It is off by default and the client decides
+what it will run. See [Pushed client scripts](remote.md).
 
 ### The three phases
 
@@ -251,6 +256,27 @@ explosions. Their `ctx` carries the relevant data (`ctx.player`, `ctx.block`, `c
 be cancelled with `ctx.cancel()`, and a few fields can be rewritten in place (like a chat
 `ctx.message`). Event names are typed, so a typo fails right away instead of quietly doing nothing.
 The [events reference](api/events.md) lists them all, along with the player / level / item wrappers.
+
+## Acting on the world
+
+The views in `ctx` are not just readable - `ctx.player`, `ctx.level`, and any entity (like
+`ctx.attacker`) can do things too: heal or give effects, place blocks, spawn mobs, play sounds, set the
+weather, and more.
+
+```python
+# server/spawn_kit.star
+def on_join(ctx):
+    ctx.player.heal()
+    ctx.player.effect("resistance", seconds = 10)
+    ctx.player.give("minecraft:bread", 5)
+    ctx.player.play_sound("minecraft:entity.player.levelup")
+    ctx.level.set_block(int(ctx.player.x), int(ctx.player.y) - 1, int(ctx.player.z), "minecraft:gold_block")
+
+events.minelark.PLAYER_JOINED.on(on_join)
+```
+
+Ids without a namespace default to `minecraft:`, and an unknown id is ignored rather than crashing the
+callback. The full verb list is in the [events reference](api/events.md).
 
 ## Styled text
 

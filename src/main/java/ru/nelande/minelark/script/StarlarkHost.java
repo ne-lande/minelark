@@ -4,7 +4,9 @@ import com.google.common.collect.ImmutableMap;
 import net.starlark.java.eval.Starlark;
 
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Entry point for running scripts of a given lifecycle phase. Builds the phase's predeclared
@@ -135,6 +137,55 @@ public final class StarlarkHost {
                         "registry", new RegistryApi(registry)),
                 new TextApi());
         int scripts = new ScriptEngine(clientDir, env, console, log).runAll();
+        return new ClientResult(events, debug, hud, net, scripts);
+    }
+
+    /**
+     * Runs <b>server-pushed</b> client scripts (received over the network and written to disk under
+     * {@code dir}) in a capability-restricted sandbox. Unlike {@link #runClient}, the environment is
+     * the intersection of what the server requested and what the client's policy allowed: the always-safe
+     * {@code events}/{@code text}/{@code log}/prelude are present, and each of {@code hud}, {@code debug},
+     * {@code net}, {@code client}, {@code mods}, {@code registry} is added only if its {@link Capability}
+     * is in {@code granted}. When {@code CLIENT_READ} is granted but {@code CHAT} is not, the {@code client}
+     * namespace is the read-only {@link ReadOnlyClientApi} (no {@code send_chat}).
+     *
+     * <p>Returns the same {@link ClientResult} shape as {@link #runClient}; components whose capability
+     * was withheld come back empty (the script never had the namespace to populate them), so the adapter
+     * can merge pushed results with local ones without null checks.
+     */
+    public static ClientResult runPushedClient(
+            Path dir, ClientAccess access, PlatformInfo platform, RegistryAccess registry,
+            ClientNetwork network, Set<Capability> granted, ScriptLog log) {
+        Log console = new Log(log);
+        Events events = new Events(console, Events.Scope.CLIENT);
+        DebugApi debug = new DebugApi();
+        HudApi hud = new HudApi();
+        boolean netGranted = granted.contains(Capability.NET);
+        ClientNetworkApi net = new ClientNetworkApi(netGranted ? network : ClientNetwork.NOOP, console);
+
+        Map<String, Object> namespaces = new LinkedHashMap<>();
+        namespaces.put("events", events);
+        if (granted.contains(Capability.HUD)) {
+            namespaces.put("hud", hud);
+        }
+        if (granted.contains(Capability.DEBUG)) {
+            namespaces.put("debug", debug);
+        }
+        if (netGranted) {
+            namespaces.put("net", net);
+        }
+        if (granted.contains(Capability.CLIENT_READ)) {
+            namespaces.put("client", granted.contains(Capability.CHAT)
+                    ? new ClientApi(access) : new ReadOnlyClientApi(access));
+        }
+        if (granted.contains(Capability.MODS)) {
+            namespaces.put("mods", new ModsApi(platform));
+        }
+        if (granted.contains(Capability.REGISTRY)) {
+            namespaces.put("registry", new RegistryApi(registry));
+        }
+        ImmutableMap<String, Object> env = environmentWith(console, namespaces, new TextApi());
+        int scripts = new ScriptEngine(dir, env, console, log).runAll();
         return new ClientResult(events, debug, hud, net, scripts);
     }
 

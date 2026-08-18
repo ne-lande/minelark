@@ -25,6 +25,13 @@ public final class MinelarkConfig {
     public boolean webConsoleAutoStart = false;
     public int webConsolePort = 25599;
 
+    /**
+     * Master switch for server-to-client script propagation (N3). Off by default: like the web
+     * console, it is a feature an operator opts into. When false the server never scans {@code push/},
+     * never registers the push senders, and never offers scripts to clients.
+     */
+    public boolean remoteScriptsEnabled = false;
+
     /** Reads the config at {@code file}, writing a default file first if none exists. */
     public static MinelarkConfig load(Path file) {
         MinelarkConfig config = new MinelarkConfig();
@@ -51,6 +58,10 @@ public final class MinelarkConfig {
             if (console.has("port")) {
                 config.webConsolePort = console.get("port").getAsInt();
             }
+            JsonObject remote = root.has("remote_scripts") ? root.getAsJsonObject("remote_scripts") : new JsonObject();
+            if (remote.has("enabled")) {
+                config.remoteScriptsEnabled = remote.get("enabled").getAsBoolean();
+            }
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to read Minelark config " + file, e);
         } catch (RuntimeException malformed) {
@@ -65,8 +76,11 @@ public final class MinelarkConfig {
         console.addProperty("enabled", webConsoleEnabled);
         console.addProperty("auto_start", webConsoleAutoStart);
         console.addProperty("port", webConsolePort);
+        JsonObject remote = new JsonObject();
+        remote.addProperty("enabled", remoteScriptsEnabled);
         JsonObject root = new JsonObject();
         root.add("web_console", console);
+        root.add("remote_scripts", remote);
         return root;
     }
 }

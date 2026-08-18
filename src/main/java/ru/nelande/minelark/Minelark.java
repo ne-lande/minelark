@@ -34,6 +34,12 @@ import net.minecraft.command.argument.IdentifierArgumentType;
 import net.minecraft.component.type.FoodComponent;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.SpawnReason;
+import net.minecraft.entity.effect.StatusEffect;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.particle.ParticleEffect;
+import net.minecraft.particle.ParticleType;
 import net.minecraft.item.ArmorItem;
 import net.minecraft.item.ArmorMaterial;
 import net.minecraft.item.ArmorMaterials;
@@ -63,7 +69,10 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.BlockSoundGroup;
+import net.minecraft.sound.SoundCategory;
+import net.minecraft.sound.SoundEvent;
 import net.minecraft.text.ClickEvent;
 import net.minecraft.text.HoverEvent;
 import net.minecraft.text.MutableText;
@@ -76,6 +85,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import net.minecraft.world.GameMode;
 import net.minecraft.world.World;
 import net.starlark.java.eval.Dict;
 import net.starlark.java.eval.StarlarkFloat;
@@ -95,8 +105,10 @@ import ru.nelande.minelark.script.ArgSpec;
 import ru.nelande.minelark.script.CommandSourceView;
 import ru.nelande.minelark.script.CommandSpec;
 import ru.nelande.minelark.script.CommandsApi;
+import ru.nelande.minelark.script.EntityActions;
 import ru.nelande.minelark.script.EntityView;
 import ru.nelande.minelark.script.EventContext;
+import ru.nelande.minelark.script.LevelActions;
 import ru.nelande.minelark.script.ItemStackView;
 import ru.nelande.minelark.script.LevelView;
 import ru.nelande.minelark.script.Log;
@@ -112,7 +124,12 @@ import ru.nelande.minelark.script.RegistryAccess;
 import ru.nelande.minelark.script.RecipeSpec;
 import ru.nelande.minelark.script.RemovalSpec;
 import ru.nelande.minelark.console.ConsoleServer;
+import ru.nelande.minelark.net.PushDeliverPayload;
+import ru.nelande.minelark.net.PushOfferPayload;
+import ru.nelande.minelark.net.PushRequestPayload;
 import ru.nelande.minelark.net.ScriptPayload;
+import ru.nelande.minelark.script.PushBundle;
+import ru.nelande.minelark.script.PushBundleBuilder;
 import ru.nelande.minelark.script.ConsoleSession;
 import ru.nelande.minelark.script.ScriptLog;
 import ru.nelande.minelark.script.ServerNetwork;
@@ -378,6 +395,30 @@ public class Minelark implements ModInitializer {
         }
     };
 
+    /** Sends the current push offer to one player, if the feature is on and there is something to offer. */
+    private static void sendPushOffer(ServerPlayerEntity player) {
+        PushBundle bundle = pushBundle;
+        if (player == null || bundle.isEmpty()) {
+            return;
+        }
+        ServerPlayNetworking.send(player, new PushOfferPayload(bundle.manifest().toJsonString()));
+    }
+
+    /**
+     * Re-offers the (possibly changed) bundle to every ready player - the server side of hot-push on
+     * {@code /minelark reload}. A client that already consented re-fetches only what changed; an
+     * emptied bundle simply stops being offered. No-op before a server is running.
+     */
+    private static void broadcastPushOffer() {
+        MinecraftServer server = serverInstance;
+        if (server == null) {
+            return;
+        }
+        for (UUID uuid : netReadyPlayers) {
+            sendPushOffer(server.getPlayerManager().getPlayer(uuid));
+        }
+    }
+
     /** The active recipe-removal filters. Called by {@code RecipeManagerMixin}. */
     public static List<RemovalSpec> serverRecipeRemovals() {
         return serverRecipeRemovals;
@@ -394,7 +435,33 @@ public class Minelark implements ModInitializer {
         serverRecipeRemovals = result.recipeRemovals();
         serverLootInjects = result.lootInjects();
         serverNetwork = result.network();
+        rebuildPushBundle();
         return result;
+    }
+
+    /** The client scripts this server offers to push (empty when the feature is off or nothing opts in). */
+    private static volatile PushBundle pushBundle = PushBundle.EMPTY;
+
+    /**
+     * Rebuilds the pushable-script bundle from {@code push/} (only when {@code remote_scripts.enabled}),
+     * so {@code /minelark reload} re-scans it. An oversized folder is refused and the offer stays empty.
+     */
+    private static void rebuildPushBundle() {
+        if (!config.remoteScriptsEnabled) {
+            pushBundle = PushBundle.EMPTY;
+            return;
+        }
+        try {
+            pushBundle = new PushBundleBuilder().build(scriptDir("push"));
+            if (!pushBundle.isEmpty()) {
+                LOGGER.info("Minelark: offering {} client script(s) to connecting players",
+                        pushBundle.manifest().entries().size());
+            }
+        } catch (PushBundleBuilder.TooLarge e) {
+            LOGGER.error("Minelark: push folder too large, not offering scripts: {}", e.getMessage());
+            pushBundle = PushBundle.EMPTY;
+        }
+        broadcastPushOffer();   // hot-push: on /minelark reload, re-offer to players already on
     }
 
     /** Points the per-world and per-player stores at the loaded save (under {@code <world>/minelark/}). */
@@ -414,6 +481,26 @@ public class Minelark implements ModInitializer {
     private static void registerNetworking() {
         PayloadTypeRegistry.playS2C().register(ScriptPayload.ID, ScriptPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(ScriptPayload.ID, ScriptPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(PushOfferPayload.ID, PushOfferPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(PushDeliverPayload.ID, PushDeliverPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(PushRequestPayload.ID, PushRequestPayload.CODEC);
+        // A consenting client asks for specific script bodies by name; hand back only what is in the
+        // current offer (a client cannot fish for arbitrary files this way).
+        ServerPlayNetworking.registerGlobalReceiver(PushRequestPayload.ID, (payload, context) -> {
+            PushBundle bundle = pushBundle;
+            if (bundle.isEmpty()) {
+                return;
+            }
+            ServerPlayerEntity player = context.player();
+            context.server().execute(() -> {
+                for (String name : payload.names().split("\n")) {
+                    String body = bundle.bodies().get(name);
+                    if (body != null) {
+                        ServerPlayNetworking.send(player, new PushDeliverPayload(name, body));
+                    }
+                }
+            });
+        });
         ServerPlayNetworking.registerGlobalReceiver(ScriptPayload.ID, (payload, context) -> {
             ServerNetworkApi net = serverNetwork;
             if (!net.hasListeners(payload.channel())) {
@@ -431,6 +518,11 @@ public class Minelark implements ModInitializer {
             if (channels.contains(ScriptPayload.ID.id())) {
                 netReadyPlayers.add(handler.player.getUuid());
                 server.execute(() -> flushPendingSends(server));
+            }
+            // The client's Minelark receivers come up together; once ours is registered, offer any
+            // pushable client scripts. The client decides (from its own policy) whether to run them.
+            if (channels.contains(PushOfferPayload.ID.id())) {
+                server.execute(() -> sendPushOffer(handler.player));
             }
         });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
@@ -663,15 +755,169 @@ public class Minelark implements ModInitializer {
                     public void teleport(double x, double y, double z) {
                         player.requestTeleport(x, y, z);
                     }
+
+                    @Override
+                    public void heal() {
+                        player.setHealth(player.getMaxHealth());
+                    }
+
+                    @Override
+                    public void setHealth(double health) {
+                        player.setHealth((float) health);   // LivingEntity clamps to [0, max]
+                    }
+
+                    @Override
+                    public void damage(double amount) {
+                        player.damage(player.getDamageSources().generic(), (float) amount);
+                    }
+
+                    @Override
+                    public void effect(String effectId, int seconds, int amplifier, boolean showParticles) {
+                        RegistryEntry<StatusEffect> effect = resolveEffect(effectId);
+                        if (effect != null) {
+                            player.addStatusEffect(new StatusEffectInstance(
+                                    effect, seconds * 20, amplifier, false, showParticles));
+                        }
+                    }
+
+                    @Override
+                    public void clearEffects() {
+                        player.clearStatusEffects();
+                    }
+
+                    @Override
+                    public void giveXp(int points) {
+                        player.addExperience(points);
+                    }
+
+                    @Override
+                    public void setGamemode(String mode) {
+                        GameMode gameMode = GameMode.byName(mode, null);
+                        if (gameMode != null) {
+                            player.changeGameMode(gameMode);
+                        }
+                    }
+
+                    @Override
+                    public void playSound(String soundId, double volume, double pitch) {
+                        SoundEvent sound = resolveSound(soundId);
+                        if (sound != null) {
+                            player.getWorld().playSound(null, player.getX(), player.getY(), player.getZ(),
+                                    sound, SoundCategory.PLAYERS, (float) volume, (float) pitch);
+                        }
+                    }
+
+                    @Override
+                    public void kill() {
+                        player.kill();
+                    }
                 });
     }
 
     private static LevelView levelView(World world) {
+        LevelActions actions = world instanceof ServerWorld serverWorld
+                ? levelActions(serverWorld)
+                : LevelActions.NOOP;
         return new LevelView(
                 world.getRegistryKey().getValue().toString(),
                 world.getTimeOfDay(),
                 world.isDay(),
-                world.isRaining());
+                world.isRaining(),
+                actions);
+    }
+
+    /** The world-mutating bridge behind {@code ctx.level.*}. Unknown ids are ignored (like {@code give}). */
+    private static LevelActions levelActions(ServerWorld world) {
+        return new LevelActions() {
+            @Override
+            public void setBlock(int x, int y, int z, String blockId) {
+                Block block = resolveBlock(blockId);
+                if (block != null) {
+                    world.setBlockState(new BlockPos(x, y, z), block.getDefaultState());
+                }
+            }
+
+            @Override
+            public String getBlock(int x, int y, int z) {
+                return Registries.BLOCK.getId(world.getBlockState(new BlockPos(x, y, z)).getBlock()).toString();
+            }
+
+            @Override
+            public void spawn(String entityId, double x, double y, double z) {
+                EntityType<?> type = resolveEntityType(entityId);
+                if (type != null) {
+                    type.spawn(world, BlockPos.ofFloored(x, y, z), SpawnReason.COMMAND);
+                }
+            }
+
+            @Override
+            public void playSound(String soundId, double x, double y, double z, double volume, double pitch) {
+                SoundEvent sound = resolveSound(soundId);
+                if (sound != null) {
+                    world.playSound(null, x, y, z, sound, SoundCategory.MASTER, (float) volume, (float) pitch);
+                }
+            }
+
+            @Override
+            public void spawnParticle(String particleId, double x, double y, double z, int count) {
+                ParticleType<?> type = resolveParticle(particleId);
+                if (type instanceof ParticleEffect effect) {
+                    world.spawnParticles(effect, x, y, z, count, 0, 0, 0, 0);
+                }
+            }
+
+            @Override
+            public void setTime(long ticks) {
+                world.setTimeOfDay(ticks);
+            }
+
+            @Override
+            public void setWeather(String kind) {
+                switch (kind) {
+                    case "rain" -> world.setWeather(0, 6000, true, false);
+                    case "thunder" -> world.setWeather(0, 6000, true, true);
+                    default -> world.setWeather(6000, 0, false, false);   // "clear"
+                }
+            }
+
+            @Override
+            public void explode(double x, double y, double z, double power, boolean fire, boolean destroyBlocks) {
+                world.createExplosion(null, x, y, z, (float) power, fire,
+                        destroyBlocks ? World.ExplosionSourceType.TNT : World.ExplosionSourceType.NONE);
+            }
+
+            @Override
+            public void strikeLightning(double x, double y, double z) {
+                EntityType.LIGHTNING_BOLT.spawn(world, BlockPos.ofFloored(x, y, z), SpawnReason.COMMAND);
+            }
+        };
+    }
+
+    // --- id resolution for the action verbs (bare id -> minecraft:, like recipes/registry) ---
+
+    private static RegistryEntry<StatusEffect> resolveEffect(String id) {
+        Identifier ident = Identifier.tryParse(id);
+        return ident == null ? null : Registries.STATUS_EFFECT.getEntry(ident).orElse(null);
+    }
+
+    private static Block resolveBlock(String id) {
+        Identifier ident = Identifier.tryParse(id);
+        return ident == null ? null : Registries.BLOCK.getOrEmpty(ident).orElse(null);
+    }
+
+    private static EntityType<?> resolveEntityType(String id) {
+        Identifier ident = Identifier.tryParse(id);
+        return ident == null ? null : Registries.ENTITY_TYPE.getOrEmpty(ident).orElse(null);
+    }
+
+    private static SoundEvent resolveSound(String id) {
+        Identifier ident = Identifier.tryParse(id);
+        return ident == null ? null : Registries.SOUND_EVENT.getOrEmpty(ident).orElse(null);
+    }
+
+    private static ParticleType<?> resolveParticle(String id) {
+        Identifier ident = Identifier.tryParse(id);
+        return ident == null ? null : Registries.PARTICLE_TYPE.getOrEmpty(ident).orElse(null);
     }
 
     private static ItemStackView itemStackView(ItemStack stack) {
@@ -691,7 +937,36 @@ public class Minelark implements ModInitializer {
                 entity.getUuidAsString(),
                 entity.getName().getString(),
                 entity.getX(), entity.getY(), entity.getZ(),
-                levelView(entity.getWorld()));
+                levelView(entity.getWorld()),
+                new EntityActions() {
+                    @Override
+                    public void kill() {
+                        entity.kill();
+                    }
+
+                    @Override
+                    public void effect(String effectId, int seconds, int amplifier, boolean showParticles) {
+                        if (entity instanceof LivingEntity living) {
+                            RegistryEntry<StatusEffect> effect = resolveEffect(effectId);
+                            if (effect != null) {
+                                living.addStatusEffect(new StatusEffectInstance(
+                                        effect, seconds * 20, amplifier, false, showParticles));
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void teleport(double x, double y, double z) {
+                        entity.requestTeleport(x, y, z);
+                    }
+
+                    @Override
+                    public void damage(double amount) {
+                        if (entity instanceof LivingEntity living) {
+                            living.damage(entity.getDamageSources().generic(), (float) amount);
+                        }
+                    }
+                });
     }
 
     /** Turns a script-built {@link MineText} component into a real Minecraft {@link Text}. */
@@ -1253,10 +1528,12 @@ public class Minelark implements ModInitializer {
             Files.createDirectories(scriptDir("startup"));
             Files.createDirectories(scriptDir("server"));
             Files.createDirectories(scriptDir("client"));
+            Files.createDirectories(scriptDir("push"));
 
             writeIfAbsent(scriptDir("startup").resolve("example.star"), DEFAULT_STARTUP_SCRIPT);
             writeIfAbsent(scriptDir("server").resolve("example.star"), DEFAULT_SERVER_SCRIPT);
             writeIfAbsent(scriptDir("client").resolve("example.star"), DEFAULT_CLIENT_SCRIPT);
+            writeIfAbsent(scriptDir("push").resolve("example.star"), DEFAULT_PUSH_SCRIPT);
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to prepare minelark script folders", e);
         }
@@ -1390,6 +1667,27 @@ public class Minelark implements ModInitializer {
                     pos = str(int(p.x)) + ", " + str(int(p.y)) + ", " + str(int(p.z))
                     debug.set("pos", pos)
                     hud.text("pos", text(pos).color("aqua"), x = 4, y = 4, anchor = "top_right")
+
+            events.minelark.CLIENT_TICK.on(on_tick)
+            """;
+
+    private static final String DEFAULT_PUSH_SCRIPT = """
+            # Minelark pushed client script.
+            # These run on CONNECTING PLAYERS' clients, not on the server - "resource packs, but for
+            # behaviour." A file is only offered if it carries the directive on its first line, and
+            # only if the server config has remote_scripts.enabled = true.
+            #
+            # The player must consent, and their own security policy decides what is allowed. By
+            # default that is visual-only: hud, debug, events, text, read-only client, mods, registry.
+            # To ask for more, name the capabilities, e.g.  # minelark: push capabilities=hud,net
+            # minelark: push
+
+            log.info("Pushed client script running.")
+
+            # A server-provided HUD every consenting player sees.
+            def on_tick(ctx):
+                hud.text("server_tag", text("Running server scripts").color("aqua"),
+                         x = 4, y = 4, anchor = "top_left")
 
             events.minelark.CLIENT_TICK.on(on_tick)
             """;

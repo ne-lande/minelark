@@ -100,6 +100,18 @@ Some `ctx` fields are small typed views of game objects rather than plain values
 | `.tell(message)` | Sends a message (a string or a `text(...)` component - see the [Text API](text.md)). |
 | `.give(item, count = 1)` | Gives the player an item by id (unknown ids are ignored). |
 | `.teleport(x, y, z)` | Moves the player within their current world. |
+| `.heal()` | Restores the player to full health. |
+| `.set_health(value)` | Sets health (2 per heart), clamped to the maximum. |
+| `.damage(amount)` | Deals damage (2 per heart). |
+| `.effect(id, seconds = 30, amplifier = 0, show_particles = True)` | Applies a status effect. `amplifier` is 0-based (0 = level I, 1 = level II). Unknown ids are ignored. |
+| `.clear_effects()` | Removes all status effects. |
+| `.give_xp(points)` | Grants experience points. |
+| `.set_gamemode(mode)` | Sets `survival`, `creative`, `adventure`, or `spectator`. |
+| `.play_sound(id, volume = 1.0, pitch = 1.0)` | Plays a sound at the player. Unknown ids are ignored. |
+| `.kill()` | Kills the player. |
+
+The action verbs take effect on the server (call them from event or command callbacks). Ids without a
+namespace default to `minecraft:`, and an unknown id is ignored rather than raising.
 
 **`ctx.level`** (and `ctx.player.level`) - a world:
 
@@ -108,6 +120,15 @@ Some `ctx` fields are small typed views of game objects rather than plain values
 | `.dimension` | The dimension id, e.g. `minecraft:overworld`. |
 | `.time` | Time of day, in ticks. |
 | `.is_day` / `.is_raining` | Current conditions. |
+| `.set_block(x, y, z, block)` | Places a block's default state. Unknown ids are ignored. |
+| `.get_block(x, y, z)` | Returns the id of the block there, e.g. `minecraft:stone`. |
+| `.spawn(entity, x, y, z)` | Spawns an entity by type id. |
+| `.play_sound(id, x, y, z, volume = 1.0, pitch = 1.0)` | Plays a sound at a position. |
+| `.spawn_particle(id, x, y, z, count = 1)` | Spawns particles at a position. |
+| `.set_time(ticks)` | Sets the time of day (0 dawn, 6000 noon, 18000 midnight). |
+| `.set_weather(kind)` | Sets `clear`, `rain`, or `thunder`. |
+| `.explode(x, y, z, power = 4.0, fire = False, destroy_blocks = True)` | Creates an explosion (TNT is power 4). |
+| `.strike_lightning(x, y, z)` | Strikes lightning at a position. |
 
 **`ctx.player.held_item`** (and other stacks) - an item stack:
 
@@ -127,10 +148,16 @@ Some `ctx` fields are small typed views of game objects rather than plain values
 | `.name` | Its display name. |
 | `.x` / `.y` / `.z` | Its position. |
 | `.level` | The world it is in. |
+| `.kill()` | Removes the entity from the world. |
+| `.effect(id, seconds = 30, amplifier = 0, show_particles = True)` | Applies a status effect (living entities). |
+| `.teleport(x, y, z)` | Moves the entity within its world. |
+| `.damage(amount)` | Deals damage (living entities). |
 
 ```python
 def greet(ctx):
     ctx.player.tell("Welcome, " + ctx.player.name + "!")
+    ctx.player.heal()
+    ctx.player.effect("regeneration", seconds = 5)
     if ctx.player.level.dimension == "minecraft:the_end":
         ctx.player.give("minecraft:elytra")
 

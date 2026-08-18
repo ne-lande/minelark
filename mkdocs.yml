@@ -60,5 +60,6 @@ nav:
       - Commands: api/commands.md
       - Mods: api/mods.md
       - Registry: api/registry.md
+  - Pushed client scripts: remote.md
   - Extending from a mod: extending.md
   - Roadmap: roadmap.md

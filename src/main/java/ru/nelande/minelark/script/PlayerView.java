@@ -3,7 +3,6 @@ package ru.nelande.minelark.script;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.EvalException;
-import net.starlark.java.eval.StarlarkFloat;
 import net.starlark.java.eval.StarlarkInt;
 import net.starlark.java.eval.StarlarkValue;
 
@@ -131,17 +130,79 @@ public final class PlayerView implements StarlarkValue {
                     @Param(name = "y", doc = "Target y."),
                     @Param(name = "z", doc = "Target z.")})
     public void teleport(Object x, Object y, Object z) throws EvalException {
-        actions.teleport(toDouble(x), toDouble(y), toDouble(z));
+        actions.teleport(Nums.toDouble(x), Nums.toDouble(y), Nums.toDouble(z));
     }
 
-    private static double toDouble(Object value) throws EvalException {
-        if (value instanceof StarlarkInt i) {
-            return i.toIntUnchecked();
-        }
-        if (value instanceof StarlarkFloat f) {
-            return f.toDouble();
-        }
-        throw new EvalException("expected a number, got " + value);
+    @StarlarkMethod(name = "heal", doc = "Restores the player to full health.")
+    public void heal() {
+        actions.heal();
+    }
+
+    @StarlarkMethod(
+            name = "set_health",
+            doc = "Sets the player's health (2 per heart), clamped to their maximum.",
+            parameters = {@Param(name = "health", doc = "The new health value.")})
+    public void setHealth(Object health) throws EvalException {
+        actions.setHealth(Nums.toDouble(health));
+    }
+
+    @StarlarkMethod(
+            name = "damage",
+            doc = "Deals damage to the player (2 per heart).",
+            parameters = {@Param(name = "amount", doc = "How much damage to deal.")})
+    public void damage(Object amount) throws EvalException {
+        actions.damage(Nums.toDouble(amount));
+    }
+
+    @StarlarkMethod(
+            name = "effect",
+            doc = "Applies a status effect. `amplifier` is the MC level (0 = level I, 1 = level II). "
+                    + "Unknown effect ids are ignored.",
+            parameters = {
+                    @Param(name = "effect", doc = "The effect id, e.g. `\"speed\"` or `\"minecraft:regeneration\"`."),
+                    @Param(name = "seconds", named = true, defaultValue = "30", doc = "Duration in seconds."),
+                    @Param(name = "amplifier", named = true, defaultValue = "0", doc = "Level, 0-based (0 = I)."),
+                    @Param(name = "show_particles", named = true, defaultValue = "True",
+                            doc = "Whether the effect shows its particles.")})
+    public void effect(String effect, StarlarkInt seconds, StarlarkInt amplifier, boolean showParticles) {
+        actions.effect(effect, seconds.toIntUnchecked(), amplifier.toIntUnchecked(), showParticles);
+    }
+
+    @StarlarkMethod(name = "clear_effects", doc = "Removes all status effects from the player.")
+    public void clearEffects() {
+        actions.clearEffects();
+    }
+
+    @StarlarkMethod(
+            name = "give_xp",
+            doc = "Grants the player experience points.",
+            parameters = {@Param(name = "points", doc = "How many experience points to grant.")})
+    public void giveXp(StarlarkInt points) {
+        actions.giveXp(points.toIntUnchecked());
+    }
+
+    @StarlarkMethod(
+            name = "set_gamemode",
+            doc = "Sets the player's game mode: `survival`, `creative`, `adventure`, or `spectator`.",
+            parameters = {@Param(name = "mode", doc = "The game mode name.")})
+    public void setGamemode(String mode) {
+        actions.setGamemode(mode);
+    }
+
+    @StarlarkMethod(
+            name = "play_sound",
+            doc = "Plays a sound at the player's position. Unknown sound ids are ignored.",
+            parameters = {
+                    @Param(name = "sound", doc = "The sound id, e.g. `\"minecraft:entity.player.levelup\"`."),
+                    @Param(name = "volume", named = true, defaultValue = "1.0", doc = "Sound volume."),
+                    @Param(name = "pitch", named = true, defaultValue = "1.0", doc = "Sound pitch.")})
+    public void playSound(String sound, Object volume, Object pitch) throws EvalException {
+        actions.playSound(sound, Nums.toDouble(volume), Nums.toDouble(pitch));
+    }
+
+    @StarlarkMethod(name = "kill", doc = "Kills the player.")
+    public void kill() {
+        actions.kill();
     }
 
     @Override

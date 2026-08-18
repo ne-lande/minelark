@@ -1,12 +1,15 @@
 package ru.nelande.minelark.client;
 
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.fabric.api.client.render.fluid.v1.FluidRenderHandlerRegistry;
@@ -28,16 +31,25 @@ import org.joml.Vector3f;
 import net.minecraft.fluid.Fluid;
 import net.minecraft.util.Identifier;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.network.ServerInfo;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
+import net.minecraft.text.ClickEvent;
+import net.minecraft.text.HoverEvent;
+import net.minecraft.text.MutableText;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import net.minecraft.world.World;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Sequence;
 import net.starlark.java.eval.StarlarkList;
 import ru.nelande.minelark.Minelark;
+import ru.nelande.minelark.net.PushDeliverPayload;
+import ru.nelande.minelark.net.PushOfferPayload;
+import ru.nelande.minelark.net.PushRequestPayload;
 import ru.nelande.minelark.net.ScriptPayload;
+import ru.nelande.minelark.script.Capability;
 import ru.nelande.minelark.script.ClientAccess;
 import ru.nelande.minelark.script.ClientNetwork;
 import ru.nelande.minelark.script.ClientNetworkApi;
@@ -56,12 +68,22 @@ import ru.nelande.minelark.pack.GeneratedResourcePack;
 import ru.nelande.minelark.script.FluidSpec;
 import ru.nelande.minelark.script.PlayerActions;
 import ru.nelande.minelark.script.PlayerView;
+import ru.nelande.minelark.script.PushManifest;
+import ru.nelande.minelark.script.RemoteScriptPolicy;
+import ru.nelande.minelark.script.Sha256;
 import ru.nelande.minelark.script.StarlarkHost;
 import ru.nelande.minelark.script.StartupResult;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Client-side adapter: runs the {@code client/} scripts once at client startup and bridges the
@@ -78,6 +100,31 @@ public final class MinelarkClient implements ClientModInitializer {
     private static HudApi hud = new HudApi();
     /** The client scripts' {@code net} channel handlers, fired when a server message arrives. */
     private static ClientNetworkApi clientNetwork = new ClientNetworkApi(ClientNetwork.NOOP, new Log(Minelark.SCRIPT_LOG));
+
+    // --- N3: server-pushed client scripts (kept separate from the local client scripts above, so both
+    // sets of events/HUD/debug/net render and fire; the local ones are never affected by a server) ---
+
+    /** The client's editable security policy for pushed scripts; loaded lazily on the first offer. */
+    private static RemoteScriptPolicy remotePolicy;
+    /** Results of the currently-running pushed bundle (empty until a server's scripts are accepted+run). */
+    private static Events pushedEvents = new Events(new Log(Minelark.SCRIPT_LOG), Events.Scope.CLIENT);
+    private static DebugApi pushedDebug = new DebugApi();
+    private static HudApi pushedHud = new HudApi();
+    private static ClientNetworkApi pushedNetwork = new ClientNetworkApi(ClientNetwork.NOOP, new Log(Minelark.SCRIPT_LOG));
+
+    /** The offer being downloaded/awaited for the current server, or null. Guarded by the client thread. */
+    private static PushManifest activeManifest;
+    /** The source key (server address) the {@link #activeManifest} came from. */
+    private static String activeSource;
+    /** Capabilities granted for the active offer (server request capped by the client policy). */
+    private static Set<Capability> activeGranted = Set.of();
+    /** File names still awaited from the server before the active bundle can run. */
+    private static final Set<String> pendingFiles = new LinkedHashSet<>();
+    /** An offer awaiting the player's decision (from a chat prompt), or null. */
+    private static PushManifest promptManifest;
+    private static String promptSource;
+    /** The bundle hash last run, so an unchanged hot-push offer is a no-op. */
+    private static String lastRanBundleHash = "";
 
     /** Puts a client {@code net.send} on the wire to the server. */
     private static final ClientNetwork CLIENT_SENDER = (channel, json) -> {
@@ -110,36 +157,361 @@ public final class MinelarkClient implements ClientModInitializer {
         registerClientEvents();
         registerHudRendering();
         registerNetworking();
+        registerPushReceivers();
+        registerRemoteCommands();
         Minelark.LOGGER.info("Minelark client: {} script(s) loaded.", result.scriptCount());
     }
 
-    /** Decodes server-to-client messages and fires the client scripts' {@code net.on} handlers. */
+    /** Decodes server-to-client messages and fires both local and pushed {@code net.on} handlers. */
     private static void registerNetworking() {
         ClientPlayNetworking.registerGlobalReceiver(ScriptPayload.ID, (payload, context) -> {
-            if (!clientNetwork.hasListeners(payload.channel())) {
+            boolean local = clientNetwork.hasListeners(payload.channel());
+            boolean pushed = pushedNetwork.hasListeners(payload.channel());
+            if (!local && !pushed) {
                 return;
             }
-            context.client().execute(() ->
-                    clientNetwork.dispatch(payload.channel(), payload.data(), Minelark.SCRIPT_LOG));
+            context.client().execute(() -> {
+                if (local) {
+                    clientNetwork.dispatch(payload.channel(), payload.data(), Minelark.SCRIPT_LOG);
+                }
+                if (pushed) {
+                    pushedNetwork.dispatch(payload.channel(), payload.data(), Minelark.SCRIPT_LOG);
+                }
+            });
         });
     }
 
-    /** The F3 debug lines to append to the vanilla overlay. Called by {@code DebugHudMixin}. */
+    // --- N3: receiving, verifying, and running server-pushed client scripts ---
+
+    /** The {@code <gamedir>/minelark} directory (parent of the phase folders). */
+    private static Path minelarkDir() {
+        return Minelark.scriptDir("startup").getParent();
+    }
+
+    /** The client's remote-script policy, loaded (with secure defaults) on first use. */
+    private static RemoteScriptPolicy policy() {
+        if (remotePolicy == null) {
+            remotePolicy = RemoteScriptPolicy.load(minelarkDir().resolve("remote_policy.json"));
+        }
+        return remotePolicy;
+    }
+
+    /** Registers the offer/deliver receivers that drive script propagation from the server. */
+    private static void registerPushReceivers() {
+        ClientPlayNetworking.registerGlobalReceiver(PushOfferPayload.ID, (payload, context) ->
+                context.client().execute(() -> onOffer(payload.manifest())));
+        ClientPlayNetworking.registerGlobalReceiver(PushDeliverPayload.ID, (payload, context) ->
+                context.client().execute(() -> onDeliver(payload.name(), payload.body())));
+        // Leaving a server stops its pushed scripts (they never linger onto the next connection).
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> {
+            clearPushed();
+            promptManifest = null;
+            promptSource = null;
+        }));
+    }
+
+    /** Handles a server's offer: gate singleplayer, consult the policy, then request, prompt, or ignore. */
+    private static void onOffer(String manifestJson) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.isIntegratedServerRunning()) {
+            return;   // never engage in singleplayer / self-hosted LAN
+        }
+        String source = currentSource();
+        if (source == null) {
+            return;   // no identifiable server to key consent on
+        }
+        PushManifest manifest;
+        try {
+            manifest = PushManifest.fromJsonString(manifestJson);
+        } catch (RuntimeException malformed) {
+            Minelark.LOGGER.warn("Minelark: ignoring a malformed push offer from {}", source);
+            return;
+        }
+        if (manifest.entries().isEmpty()) {
+            clearPushed();   // the server withdrew its scripts (e.g. emptied push/ then reloaded)
+            return;
+        }
+        if (manifest.bundleHash().equals(lastRanBundleHash) && source.equals(activeSource)) {
+            return;   // unchanged hot-push offer; already running this exact bundle
+        }
+        switch (policy().decide(source, manifest.requested())) {
+            case ACCEPT -> beginDownload(source, manifest);
+            case DECLINE -> { /* remembered no / blocked / feature off: silently ignore */ }
+            case PROMPT -> prompt(source, manifest);
+        }
+    }
+
+    /** Works out which files are not already cached at the right hash, and asks the server for them. */
+    private static void beginDownload(String source, PushManifest manifest) {
+        activeManifest = manifest;
+        activeSource = source;
+        activeGranted = policy().granted(manifest.requested());
+        pendingFiles.clear();
+        Path dir = receivedDir(source);
+        for (PushManifest.Entry entry : manifest.entries()) {
+            if (!cachedMatches(dir.resolve(entry.name()), entry.sha256())) {
+                pendingFiles.add(entry.name());
+            }
+        }
+        if (pendingFiles.isEmpty()) {
+            runPushed();   // everything already cached (reconnect, or an unchanged file set)
+            return;
+        }
+        ClientPlayNetworking.send(new PushRequestPayload(String.join("\n", pendingFiles)));
+    }
+
+    /** Handles a delivered body: verify its hash against the manifest, cache it, and run when complete. */
+    private static void onDeliver(String name, String body) {
+        if (activeManifest == null) {
+            return;
+        }
+        PushManifest.Entry entry = activeManifest.entries().stream()
+                .filter(e -> e.name().equals(name)).findFirst().orElse(null);
+        if (entry == null) {
+            return;   // not part of the current offer
+        }
+        if (!Sha256.hex(body).equals(entry.sha256())) {
+            Minelark.LOGGER.warn("Minelark: dropping pushed script '{}' - hash mismatch (corrupt or spoofed)", name);
+            return;
+        }
+        writeReceived(receivedDir(activeSource).resolve(name), body);
+        pendingFiles.remove(name);
+        if (pendingFiles.isEmpty()) {
+            runPushed();
+        }
+    }
+
+    /** Runs the fully-downloaded active bundle in the capability-restricted sandbox, replacing any prior. */
+    private static void runPushed() {
+        Path dir = receivedDir(activeSource);
+        // Verify the whole set once more, and drop any cached file no longer in the offer (so a script
+        // the server removed does not keep running).
+        Set<String> names = new LinkedHashSet<>();
+        for (PushManifest.Entry entry : activeManifest.entries()) {
+            if (!cachedMatches(dir.resolve(entry.name()), entry.sha256())) {
+                Minelark.LOGGER.warn("Minelark: pushed bundle incomplete ('{}' missing/mismatched); not running", entry.name());
+                return;
+            }
+            names.add(entry.name());
+        }
+        pruneStale(dir, names);
+
+        ClientResult result = StarlarkHost.runPushedClient(
+                dir, CLIENT_ACCESS, Minelark.platformInfo(), Minelark.registryAccess(),
+                CLIENT_SENDER, activeGranted, Minelark.SCRIPT_LOG);
+        pushedEvents = result.events();
+        pushedDebug = result.debug();
+        pushedHud = result.hud();
+        pushedNetwork = result.network();
+        lastRanBundleHash = activeManifest.bundleHash();
+        Minelark.LOGGER.info("Minelark: running {} pushed client script(s) from {} (granted: {})",
+                result.scriptCount(), activeSource, Capability.tokens(activeGranted));
+    }
+
+    /** Drops all pushed state - used on decline, on an empty offer, or when leaving a server. */
+    private static void clearPushed() {
+        pushedEvents = new Events(new Log(Minelark.SCRIPT_LOG), Events.Scope.CLIENT);
+        pushedDebug = new DebugApi();
+        pushedHud = new HudApi();
+        pushedNetwork = new ClientNetworkApi(ClientNetwork.NOOP, new Log(Minelark.SCRIPT_LOG));
+        activeManifest = null;
+        activeSource = null;
+        activeGranted = Set.of();
+        pendingFiles.clear();
+        lastRanBundleHash = "";
+    }
+
+    /** Posts the clickable consent prompt and remembers the offer so a button can act on it. */
+    private static void prompt(String source, PushManifest manifest) {
+        promptManifest = manifest;
+        promptSource = source;
+        MutableText message = Text.literal("[Minelark] ").formatted(Formatting.AQUA)
+                .append(Text.literal("This server wants to run client scripts on your machine. ")
+                        .formatted(Formatting.WHITE))
+                .append(button("[Accept]", Formatting.GREEN, "/mlremote accept"))
+                .append(Text.literal(" "))
+                .append(button("[Decline]", Formatting.RED, "/mlremote decline"))
+                .append(Text.literal(" "))
+                .append(button("[What can they do?]", Formatting.GRAY, "/mlremote details"));
+        showLocal(message);
+    }
+
+    /** A single clickable chat button that runs a client command when clicked. */
+    private static MutableText button(String label, Formatting color, String command) {
+        return Text.literal(label).setStyle(Style.EMPTY
+                .withColor(color)
+                .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command))
+                .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal(command))));
+    }
+
+    /** Registers the client-only {@code /mlremote ...} commands the consent buttons and policy use. */
+    private static void registerRemoteCommands() {
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, access) ->
+                dispatcher.register(ClientCommandManager.literal("mlremote")
+                        .then(ClientCommandManager.literal("accept").executes(ctx -> {
+                            respondToPrompt(true);
+                            return 1;
+                        }))
+                        .then(ClientCommandManager.literal("decline").executes(ctx -> {
+                            respondToPrompt(false);
+                            return 1;
+                        }))
+                        .then(ClientCommandManager.literal("trust").executes(ctx -> {
+                            trustCurrent();
+                            return 1;
+                        }))
+                        .then(ClientCommandManager.literal("details").executes(ctx -> {
+                            showDetails();
+                            return 1;
+                        }))
+                        .then(ClientCommandManager.literal("list").executes(ctx -> {
+                            listPolicy();
+                            return 1;
+                        }))));
+    }
+
+    /** Accept/decline a pending prompt: remember the choice and either download or drop. */
+    private static void respondToPrompt(boolean accepted) {
+        if (promptManifest == null || promptSource == null) {
+            showLocal(Text.literal("[Minelark] No pending script offer.").formatted(Formatting.GRAY));
+            return;
+        }
+        PushManifest manifest = promptManifest;
+        String source = promptSource;
+        promptManifest = null;
+        promptSource = null;
+        policy().remember(source, accepted);
+        if (accepted) {
+            showLocal(Text.literal("[Minelark] Accepted scripts from " + source + ".").formatted(Formatting.GREEN));
+            beginDownload(source, manifest);
+        } else {
+            showLocal(Text.literal("[Minelark] Declined. This server's scripts will not run.").formatted(Formatting.RED));
+            clearPushed();
+        }
+    }
+
+    /** Always-allow the current server (skips future prompts) and download its pending offer now. */
+    private static void trustCurrent() {
+        String source = currentSource();
+        if (source == null) {
+            return;
+        }
+        policy().trust(source);
+        showLocal(Text.literal("[Minelark] Trusting " + source + " - its scripts will run without asking.")
+                .formatted(Formatting.GREEN));
+        if (promptManifest != null && source.equals(promptSource)) {
+            PushManifest manifest = promptManifest;
+            promptManifest = null;
+            promptSource = null;
+            beginDownload(source, manifest);
+        }
+    }
+
+    /** Explains what pushed scripts can and cannot do, and what this offer requested. */
+    private static void showDetails() {
+        showLocal(Text.literal("[Minelark] Pushed scripts run sandboxed. They can draw HUDs and F3 lines, "
+                + "show local messages, and read your chat/tooltips. They cannot run commands or send chat "
+                + "as you, read your files, or reach other servers.").formatted(Formatting.GRAY));
+        if (promptManifest != null) {
+            showLocal(Text.literal("This server requested: " + Capability.tokens(promptManifest.requested())
+                    + "; your policy allows: " + Capability.tokens(policy().granted(promptManifest.requested()))
+                    + ".").formatted(Formatting.GRAY));
+        }
+    }
+
+    /** Prints the current remote-script policy (trusted sources and remembered decisions). */
+    private static void listPolicy() {
+        showLocal(Text.literal("[Minelark] Remote scripts " + (policy().enabled() ? "on" : "off")
+                + "; allowed by default: " + Capability.tokens(policy().defaultAllow())).formatted(Formatting.AQUA));
+        showLocal(Text.literal("Trusted: " + policy().trustedSources()).formatted(Formatting.GRAY));
+        showLocal(Text.literal("Remembered: " + policy().decisions()).formatted(Formatting.GRAY));
+    }
+
+    // --- helpers for the received-script cache ---
+
+    /** {@code <gamedir>/minelark/.received/<sanitised-source>/} - where a server's pushed files are cached. */
+    private static Path receivedDir(String source) {
+        String safe = source.replaceAll("[^a-zA-Z0-9_.-]", "_");
+        return minelarkDir().resolve(".received").resolve(safe);
+    }
+
+    private static boolean cachedMatches(Path file, String sha256) {
+        try {
+            return Files.isRegularFile(file) && Sha256.hex(Files.readString(file)).equals(sha256);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static void writeReceived(Path file, String body) {
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, body);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to cache pushed script " + file, e);
+        }
+    }
+
+    /** Deletes cached {@code .star} files that are not in the current bundle, so removed scripts stop running. */
+    private static void pruneStale(Path dir, Set<String> keep) {
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(dir)) {
+            List<Path> stale = walk
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".star"))
+                    .filter(p -> !keep.contains(dir.relativize(p).toString().replace('\\', '/')))
+                    .toList();
+            for (Path file : stale) {
+                Files.deleteIfExists(file);
+            }
+        } catch (IOException e) {
+            Minelark.LOGGER.warn("Minelark: could not prune stale pushed scripts in {}", dir, e);
+        }
+    }
+
+    /** The current server's address, used as the consent key; null in singleplayer or if unknown. */
+    private static String currentSource() {
+        ServerInfo entry = MinecraftClient.getInstance().getCurrentServerEntry();
+        return entry != null ? entry.address : null;
+    }
+
+    /** Shows a message in the local chat (never sent anywhere). */
+    private static void showLocal(Text message) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.inGameHud != null) {
+            mc.inGameHud.getChatHud().addMessage(message);
+        }
+    }
+
+    /** The F3 debug lines to append to the vanilla overlay (local scripts, then pushed). */
     public static List<String> debugLines() {
-        return debug.lines();
+        List<String> local = debug.lines();
+        List<String> pushed = pushedDebug.lines();
+        if (pushed.isEmpty()) {
+            return local;
+        }
+        List<String> combined = new ArrayList<>(local);
+        combined.addAll(pushed);
+        return combined;
     }
 
     /** Draws the client scripts' {@code hud.*} elements onto the screen each frame. */
     private static void registerHudRendering() {
         HudRenderCallback.EVENT.register((context, tickCounter) -> {
-            List<HudElement> elements = hud.elements();
-            if (elements.isEmpty()) {
+            List<HudElement> local = hud.elements();
+            List<HudElement> pushed = pushedHud.elements();
+            if (local.isEmpty() && pushed.isEmpty()) {
                 return;
             }
             TextRenderer font = MinecraftClient.getInstance().textRenderer;
             int screenW = context.getScaledWindowWidth();
             int screenH = context.getScaledWindowHeight();
-            for (HudElement element : elements) {
+            for (HudElement element : local) {
+                renderElement(context, font, element, screenW, screenH);
+            }
+            for (HudElement element : pushed) {
                 renderElement(context, font, element, screenW, screenH);
             }
         });
@@ -393,13 +765,24 @@ public final class MinelarkClient implements ClientModInitializer {
         }
     }
 
-    /** Fires {@code id} into the client callbacks, returning the (mutated) ctx, or null if unheard. */
+    /**
+     * Fires {@code id} into both the local and the pushed client callbacks (local first), returning the
+     * shared, possibly-mutated ctx, or null if neither set is listening. A pushed script sees the same
+     * client events as a local one, within its granted sandbox.
+     */
     private static EventContext dispatch(String id, Map<String, Object> data, Set<String> editable, boolean cancellable) {
-        if (!clientEvents.hasListeners(id)) {
+        boolean local = clientEvents.hasListeners(id);
+        boolean pushed = pushedEvents.hasListeners(id);
+        if (!local && !pushed) {
             return null;
         }
         EventContext ctx = new EventContext(id, data, editable, cancellable);
-        clientEvents.fire(id, ctx, Minelark.SCRIPT_LOG);
+        if (local) {
+            clientEvents.fire(id, ctx, Minelark.SCRIPT_LOG);
+        }
+        if (pushed) {
+            pushedEvents.fire(id, ctx, Minelark.SCRIPT_LOG);
+        }
         return ctx;
     }
 
