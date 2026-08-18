@@ -34,6 +34,7 @@ public final class ConsoleSession {
     private static final FileOptions OPTIONS = FileOptions.builder().allowToplevelRebinding(true).build();
 
     private final Module module;
+    private final String symbolsJson;
 
     /** Creates a session whose scripts see {@code predeclared} (namespaces + builtins) as globals. */
     public ConsoleSession(Map<String, Object> predeclared) {
@@ -42,6 +43,12 @@ public final class ConsoleSession {
         Map<String, Object> env = new LinkedHashMap<>(Starlark.UNIVERSE);
         env.putAll(predeclared);
         this.module = Module.withPredeclared(SEMANTICS, ImmutableMap.copyOf(env));
+        this.symbolsJson = ConsoleSymbols.toJson(env);
+    }
+
+    /** The autocomplete manifest (globals + namespace members) for this session's environment. */
+    public String symbolsJson() {
+        return symbolsJson;
     }
 
     /**

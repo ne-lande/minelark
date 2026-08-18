@@ -1,5 +1,7 @@
 package ru.nelande.minelark.script;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -69,6 +71,24 @@ class ConsoleSessionTest {
     void evalErrorIsReported() {
         List<String> out = session().eval("1 // 0");
         assertTrue(out.stream().anyMatch(line -> line.startsWith("error:")), "got " + out);
+    }
+
+    @Test
+    void serverConsoleManifestListsItsNamespaces() {
+        ConsoleSession session = StarlarkHost.newServerConsole(
+                PlatformInfo.EMPTY, RegistryAccess.EMPTY, new Storage(null), new Storage(null), new TestLog());
+        JsonObject root = JsonParser.parseString(session.symbolsJson()).getAsJsonObject();
+
+        List<String> globals = root.getAsJsonArray("globals").asList().stream()
+                .map(element -> element.getAsString()).toList();
+        assertTrue(globals.containsAll(
+                List.of("log", "storage", "world", "mods", "registry", "text", "translate", "print")),
+                globals.toString());
+
+        JsonObject members = root.getAsJsonObject("members");
+        List<String> registryMembers = members.getAsJsonArray("registry").asList().stream()
+                .map(element -> element.getAsJsonObject().get("name").getAsString()).toList();
+        assertTrue(registryMembers.contains("item_exists"), registryMembers.toString());
     }
 
     @Test

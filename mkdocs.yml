@@ -42,8 +42,10 @@ nav:
   - Home: README.md
   - Getting Started: getting-started.md
   - The Starlark Language: language.md
+  - Editor setup: editor.md
   - API Reference:
       - Common (log): api/common.md
+      - Prelude (stdlib): api/prelude.md
       - Startup: api/startup.md
       - Server (recipes): api/server.md
       - Tags: api/tags.md

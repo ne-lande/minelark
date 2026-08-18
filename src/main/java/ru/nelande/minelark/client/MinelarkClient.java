@@ -13,8 +13,18 @@ import net.fabricmc.fabric.api.client.render.fluid.v1.FluidRenderHandlerRegistry
 import net.fabricmc.fabric.api.client.render.fluid.v1.SimpleFluidRenderHandler;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.render.BufferBuilder;
+import net.minecraft.client.render.BufferRenderer;
+import net.minecraft.client.render.GameRenderer;
 import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.render.Tessellator;
+import net.minecraft.client.render.VertexFormat;
+import net.minecraft.client.render.VertexFormats;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import net.minecraft.fluid.Fluid;
 import net.minecraft.util.Identifier;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -119,7 +129,7 @@ public final class MinelarkClient implements ClientModInitializer {
         return debug.lines();
     }
 
-    /** Draws the client scripts' {@code hud.text(...)} elements onto the screen each frame. */
+    /** Draws the client scripts' {@code hud.*} elements onto the screen each frame. */
     private static void registerHudRendering() {
         HudRenderCallback.EVENT.register((context, tickCounter) -> {
             List<HudElement> elements = hud.elements();
@@ -130,13 +140,54 @@ public final class MinelarkClient implements ClientModInitializer {
             int screenW = context.getScaledWindowWidth();
             int screenH = context.getScaledWindowHeight();
             for (HudElement element : elements) {
-                Text text = Minelark.toMcText(element.content());
-                int width = font.getWidth(text);
-                int[] pos = position(element.anchor(), element.x(), element.y(),
-                        width, font.fontHeight, screenW, screenH);
-                context.drawText(font, text, pos[0], pos[1], element.color(), element.shadow());
+                renderElement(context, font, element, screenW, screenH);
             }
         });
+    }
+
+    /** Positions an element by its anchor and footprint, then draws the matching shape. */
+    private static void renderElement(DrawContext context, TextRenderer font, HudElement element, int sw, int sh) {
+        switch (element) {
+            case HudElement.Text e -> {
+                Text text = Minelark.toMcText(e.content());
+                int[] p = position(e.anchor(), e.x(), e.y(), font.getWidth(text), font.fontHeight, sw, sh);
+                context.drawText(font, text, p[0], p[1], e.color(), e.shadow());
+            }
+            case HudElement.Rect e -> {
+                int[] p = position(e.anchor(), e.x(), e.y(), e.width(), e.height(), sw, sh);
+                context.fill(p[0], p[1], p[0] + e.width(), p[1] + e.height(), e.color());
+            }
+            case HudElement.Bar e -> {
+                int[] p = position(e.anchor(), e.x(), e.y(), e.width(), e.height(), sw, sh);
+                context.fill(p[0], p[1], p[0] + e.width(), p[1] + e.height(), e.background());
+                int filled = (int) Math.round(e.width() * clamp01(e.progress()));
+                if (filled > 0) {
+                    context.fill(p[0], p[1], p[0] + filled, p[1] + e.height(), e.color());
+                }
+            }
+            case HudElement.Image e -> {
+                int[] p = position(e.anchor(), e.x(), e.y(), e.width(), e.height(), sw, sh);
+                Identifier texture = Identifier.tryParse(e.texture());
+                if (texture != null) {
+                    context.drawGuiTexture(texture, p[0], p[1], e.width(), e.height());
+                }
+            }
+            case HudElement.Item e -> {
+                int[] p = position(e.anchor(), e.x(), e.y(), 16, 16, sw, sh);
+                Identifier id = Identifier.tryParse(e.itemId());
+                if (id != null) {
+                    context.drawItem(new ItemStack(Registries.ITEM.get(id)), p[0], p[1]);
+                }
+            }
+            case HudElement.Pie e -> {
+                int[] p = position(e.anchor(), e.x(), e.y(), e.radius() * 2, e.radius() * 2, sw, sh);
+                renderPie(context, e, p[0], p[1]);
+            }
+            case HudElement.Graph e -> {
+                int[] p = position(e.anchor(), e.x(), e.y(), e.width(), e.height(), sw, sh);
+                renderGraph(context, e, p[0], p[1]);
+            }
+        }
     }
 
     /** Turns an anchor and offsets into an absolute (x, y), inset from the chosen screen edge/corner. */
@@ -148,6 +199,77 @@ public final class MinelarkClient implements ClientModInitializer {
             case BOTTOM_RIGHT -> new int[]{screenW - x - width, screenH - y - height};
             case CENTER -> new int[]{screenW / 2 - width / 2 + x, screenH / 2 - height / 2 + y};
         };
+    }
+
+    private static double clamp01(double value) {
+        return value < 0 ? 0 : Math.min(value, 1);
+    }
+
+    /** Draws a bar graph (columns scaled to the tallest value), like the F3 frame-time graph. */
+    private static void renderGraph(DrawContext context, HudElement.Graph graph, int px, int py) {
+        int w = graph.width();
+        int h = graph.height();
+        context.fill(px, py, px + w, py + h, 0x40000000);   // faint backing
+        List<Double> values = graph.values();
+        double max = 0;
+        for (double value : values) {
+            max = Math.max(max, Math.abs(value));
+        }
+        if (max <= 0) {
+            return;
+        }
+        int n = values.size();
+        for (int i = 0; i < n; i++) {
+            int x0 = px + (int) ((long) i * w / n);
+            int x1 = px + (int) ((long) (i + 1) * w / n);
+            int barHeight = (int) Math.round(Math.abs(values.get(i)) / max * h);
+            context.fill(x0, py + h - barHeight, Math.max(x1, x0 + 1), py + h, graph.color());
+        }
+    }
+
+    /** Draws a pie chart as a set of coloured triangle fans (the F3-style custom vertex path). */
+    private static void renderPie(DrawContext context, HudElement.Pie pie, int px, int py) {
+        double total = 0;
+        for (HudElement.Pie.Slice slice : pie.slices()) {
+            total += Math.max(0, slice.value());
+        }
+        if (total <= 0) {
+            return;
+        }
+        double centerX = px + pie.radius();
+        double centerY = py + pie.radius();
+        double radius = pie.radius();
+        Matrix4f matrix = context.getMatrices().peek().getPositionMatrix();
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.setShader(GameRenderer::getPositionColorProgram);
+        BufferBuilder buffer = Tessellator.getInstance()
+                .begin(VertexFormat.DrawMode.TRIANGLES, VertexFormats.POSITION_COLOR);
+        double angle = -Math.PI / 2;   // start at the top (12 o'clock), sweep clockwise
+        for (HudElement.Pie.Slice slice : pie.slices()) {
+            double share = Math.max(0, slice.value()) / total;
+            if (share <= 0) {
+                continue;
+            }
+            double sweep = share * (Math.PI * 2);
+            int segments = Math.max(1, (int) Math.ceil(sweep / (Math.PI / 32)));
+            double step = sweep / segments;
+            for (int s = 0; s < segments; s++) {
+                double a0 = angle + s * step;
+                double a1 = angle + (s + 1) * step;
+                vertex(buffer, matrix, centerX, centerY, slice.color());
+                vertex(buffer, matrix, centerX + Math.cos(a0) * radius, centerY + Math.sin(a0) * radius, slice.color());
+                vertex(buffer, matrix, centerX + Math.cos(a1) * radius, centerY + Math.sin(a1) * radius, slice.color());
+            }
+            angle += sweep;
+        }
+        BufferRenderer.drawWithGlobalProgram(buffer.end());
+        RenderSystem.disableBlend();
+    }
+
+    private static void vertex(BufferBuilder buffer, Matrix4f matrix, double x, double y, int argb) {
+        Vector3f p = new Vector3f((float) x, (float) y, 0).mulPosition(matrix);
+        buffer.vertex(p.x, p.y, p.z).color(argb);
     }
 
     /** Wires up rendering for each scripted fluid: still/flow textures, tint, and a translucent layer. */

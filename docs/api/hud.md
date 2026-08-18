@@ -3,20 +3,47 @@
 # HUD API Reference
 
 The **`hud`** namespace, available to scripts in the **`minelark/client/`** folder.
-Draw your own always-on text onto the game screen (the [debug](client.md) namespace,
-by contrast, only shows on the F3 overlay). Each element is keyed, so calling
-`hud.text(...)` again with the same key replaces it - set it from a
+Draw your own always-on graphics onto the game screen - text, rectangles, progress
+bars, textures, item icons, pie charts, and bar graphs (the [debug](client.md)
+namespace, by contrast, only shows on the F3 overlay). Every element is keyed, so
+calling the same method again with the same key replaces it - update it from a
 [`CLIENT_TICK`](events.md) callback to keep it live.
+
+Positions are a pixel `x`/`y` offset from an `anchor` (`top_left`, `top_right`,
+`bottom_left`, `bottom_right`, or `center`). Colours are `#rrggbb`, or `#aarrggbb`
+with alpha where noted.
 
 ```python
 def on_tick(ctx):
     p = client.player
     if p != None:
-        hud.text("pos", text(str(int(p.x)) + " " + str(int(p.y)) + " " + str(int(p.z)))
-                 .color("aqua"), x = 4, y = 4, anchor = "top_left")
+        # coordinates, top-left
+        hud.text("pos", text("%d %d %d" % (int(p.x), int(p.y), int(p.z))).color("aqua"), x = 4, y = 4)
+        # a health bar, bottom-left
+        hud.bar("hp", 4, 4, 80, 6, p.health / 20.0, color = "#ff5555", anchor = "bottom_left")
 
 events.minelark.CLIENT_TICK.on(on_tick)
 ```
+
+---
+
+## `hud.bar(key, x, y, width, height, progress, color = "#55ff55", background = "#000000", anchor = "top_left")`
+
+Adds or replaces a horizontal progress bar filled to `progress` (0.0 to 1.0).
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `key` | string | yes | - | A stable key identifying this element. |
+| `x` | int | yes | - | Horizontal offset from the anchor. |
+| `y` | int | yes | - | Vertical offset from the anchor. |
+| `width` | int | yes | - | Width in pixels. |
+| `height` | int | yes | - | Height in pixels. |
+| `progress` | any | yes | - | How full, from 0.0 to 1.0. |
+| `color` | string | no | `"#55ff55"` | Fill colour as `#rrggbb`. |
+| `background` | string | no | `"#000000"` | Background colour as `#rrggbb` or `#aarrggbb`. |
+| `anchor` | string | no | `"top_left"` | One of `top_left`, `top_right`, `bottom_left`, `bottom_right`, `center`. |
 
 ---
 
@@ -26,21 +53,109 @@ Removes all HUD elements added by scripts.
 
 ---
 
-## `hud.remove(key)`
+## `hud.graph(key, x, y, width, height, values, color = "#56b6c2", anchor = "top_left")`
 
-Removes a HUD element previously added with `text`. Returns whether one was removed.
+Adds or replaces a bar graph of `values` (scaled to the tallest), like the F3 graph.
 
 **Parameters**
 
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `key` | string | yes | - | The key passed to `text`. |
+| `key` | string | yes | - | A stable key identifying this element. |
+| `x` | int | yes | - | Horizontal offset from the anchor. |
+| `y` | int | yes | - | Vertical offset from the anchor. |
+| `width` | int | yes | - | Width in pixels. |
+| `height` | int | yes | - | Height in pixels. |
+| `values` | any | yes | - | A list of numbers. |
+| `color` | string | no | `"#56b6c2"` | Bar colour as `#rrggbb`. |
+| `anchor` | string | no | `"top_left"` | One of `top_left`, `top_right`, `bottom_left`, `bottom_right`, `center`. |
+
+---
+
+## `hud.image(key, texture, x, y, width, height, anchor = "top_left")`
+
+Adds or replaces a texture drawn at `width`x`height`. `texture` is a GUI sprite id.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `key` | string | yes | - | A stable key identifying this element. |
+| `texture` | string | yes | - | A GUI texture/sprite id, e.g. `"minecraft:textures/gui/title/mojangstudios.png"`. |
+| `x` | int | yes | - | Horizontal offset from the anchor. |
+| `y` | int | yes | - | Vertical offset from the anchor. |
+| `width` | int | yes | - | Width in pixels. |
+| `height` | int | yes | - | Height in pixels. |
+| `anchor` | string | no | `"top_left"` | One of `top_left`, `top_right`, `bottom_left`, `bottom_right`, `center`. |
+
+---
+
+## `hud.item(key, item, x, y, anchor = "top_left")`
+
+Adds or replaces a 16x16 item icon by item id (works for scripted items too).
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `key` | string | yes | - | A stable key identifying this element. |
+| `item` | string | yes | - | An item id, e.g. `"minecraft:diamond"` or `"minelark:ruby"`. |
+| `x` | int | yes | - | Horizontal offset from the anchor. |
+| `y` | int | yes | - | Vertical offset from the anchor. |
+| `anchor` | string | no | `"top_left"` | One of `top_left`, `top_right`, `bottom_left`, `bottom_right`, `center`. |
+
+---
+
+## `hud.pie(key, x, y, radius, slices, anchor = "top_left")`
+
+Adds or replaces a pie chart. `slices` is a list of `{"value": n, "color": "#rrggbb"}` dicts, drawn clockwise from the top sized by their share of the total.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `key` | string | yes | - | A stable key identifying this element. |
+| `x` | int | yes | - | Horizontal offset from the anchor. |
+| `y` | int | yes | - | Vertical offset from the anchor. |
+| `radius` | int | yes | - | Radius in pixels. |
+| `slices` | any | yes | - | A list of `{value, color}` dicts. |
+| `anchor` | string | no | `"top_left"` | One of `top_left`, `top_right`, `bottom_left`, `bottom_right`, `center`. |
+
+---
+
+## `hud.rect(key, x, y, width, height, color = "#ffffff", anchor = "top_left")`
+
+Adds or replaces a filled rectangle - useful as a panel or background.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `key` | string | yes | - | A stable key identifying this element. |
+| `x` | int | yes | - | Horizontal offset from the anchor. |
+| `y` | int | yes | - | Vertical offset from the anchor. |
+| `width` | int | yes | - | Width in pixels. |
+| `height` | int | yes | - | Height in pixels. |
+| `color` | string | no | `"#ffffff"` | Fill colour as `#rrggbb` or `#aarrggbb` (with alpha). |
+| `anchor` | string | no | `"top_left"` | One of `top_left`, `top_right`, `bottom_left`, `bottom_right`, `center`. |
+
+---
+
+## `hud.remove(key)`
+
+Removes a HUD element previously added. Returns whether one was removed.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `key` | string | yes | - | The key the element was added under. |
 
 ---
 
 ## `hud.text(key, content, x = 0, y = 0, anchor = "top_left", color = "#ffffff", shadow = True)`
 
-Adds or replaces a keyed line of on-screen text. `content` is a string or a `text(...)` component; `x`/`y` are pixel offsets from `anchor`. Call it again with the same key (e.g. every tick) to update the line.
+Adds or replaces a keyed line of on-screen text. `content` is a string or a `text(...)` component; `x`/`y` are pixel offsets from `anchor`.
 
 **Parameters**
 
@@ -48,11 +163,11 @@ Adds or replaces a keyed line of on-screen text. `content` is a string or a `tex
 |---|---|---|---|---|
 | `key` | string | yes | - | A stable key identifying this element. |
 | `content` | any | yes | - | A string or a `text(...)` component to draw. |
-| `x` | int | no | `0` | Horizontal pixel offset from the anchor. |
-| `y` | int | no | `0` | Vertical pixel offset from the anchor. |
+| `x` | int | no | `0` | Horizontal offset from the anchor. |
+| `y` | int | no | `0` | Vertical offset from the anchor. |
 | `anchor` | string | no | `"top_left"` | One of `top_left`, `top_right`, `bottom_left`, `bottom_right`, `center`. |
-| `color` | string | no | `"#ffffff"` | Base colour as `#rrggbb` (segments of a `text(...)` with their own colour keep it). |
-| `shadow` | bool | no | `True` | Whether to draw the usual text drop-shadow. |
+| `color` | string | no | `"#ffffff"` | Base colour as `#rrggbb`. |
+| `shadow` | bool | no | `True` | Draw a drop-shadow. |
 
 ---
 

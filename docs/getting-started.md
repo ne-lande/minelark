@@ -164,8 +164,10 @@ With `enabled` set to `true`, an operator starts it on demand:
 ```
 
 That spins up the server (only when asked - it is not left running otherwise) and sends you a
-**clickable link** carrying a one-time token. Click it and you get a code editor: type Starlark, press
-**Ctrl/Cmd+Enter** to run, **Up/Down** for history. It runs against the same live session as
+**clickable link** carrying a one-time token. Click it and you get a code editor with Starlark syntax
+highlighting and **autocomplete** (namespaces and their methods, reflected from the API so it never
+drifts): type code, **Enter** to run (**Shift+Enter** for a newline), **Tab** to indent (**Shift+Tab**
+to dedent), and **Up/Down** for history. It runs against the same live session as
 `/minelark eval` (same namespaces, same "rebind, don't mutate" rule below), evaluated on the server
 thread. Close it with `/minelark console stop`; it also stops when the server stops. Set
 `auto_start: true` if you would rather it come up with the server.

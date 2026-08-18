@@ -174,6 +174,7 @@ public final class StarlarkHost {
         ImmutableMap.Builder<String, Object> env = ImmutableMap.builder();
         env.putAll(Starlark.UNIVERSE);
         env.put("log", console);
+        Starlark.addMethods(env, new PreludeApi());   // require/clamp/lerp/rgb, in every phase
         namespaces.forEach(env::put);
         for (Object holder : builtinHolders) {
             Starlark.addMethods(env, holder);

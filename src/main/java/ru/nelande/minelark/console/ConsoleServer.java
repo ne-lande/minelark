@@ -57,6 +57,7 @@ public final class ConsoleServer {
         // The bound port (if 0 was requested, the OS picked one - useful for tests).
         this.port = http.getAddress().getPort();
         http.createContext("/", this::handleRoot);
+        http.createContext("/symbols", this::handleSymbols);
         http.createContext("/eval", this::handleEval);
         http.setExecutor(Executors.newFixedThreadPool(2, runnable -> {
             Thread thread = new Thread(runnable, "minelark-console");
@@ -84,6 +85,11 @@ public final class ConsoleServer {
 
     private void handleRoot(HttpExchange exchange) throws IOException {
         respond(exchange, 200, "text/html; charset=utf-8", page);
+    }
+
+    /** The autocomplete manifest (public API names, so no token needed - the same info as the docs). */
+    private void handleSymbols(HttpExchange exchange) throws IOException {
+        respond(exchange, 200, "application/json", session.symbolsJson());
     }
 
     private void handleEval(HttpExchange exchange) throws IOException {

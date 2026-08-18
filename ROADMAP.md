@@ -35,7 +35,8 @@ The KubeJS-parity core is done, and where a client was needed it has been verifi
 - **Events and runtime:** namespaced, typed, cancellable events (server and client) with a mutable
   `ctx`; `text()` / `translate()` components with colour, hover, and click; player / level / item /
   entity wrappers; custom `commands`.
-- **Client:** client scripts, F3 `debug` lines, on-screen `hud`, and tooltip / chat hooks.
+- **Client:** client scripts, F3 `debug` lines, an on-screen `hud` (text, rectangles, progress bars,
+  textures, item icons, pie charts, bar graphs), and tooltip / chat hooks.
 - **Storage:** persistent `storage` (install-global), `world` (per-world), and
   `storage.player(uuid)` (per-world, per-player).
 - **Networking:** `net` server-to-client and client-to-server channels carrying JSON, including
@@ -66,19 +67,37 @@ module** so definitions persist between lines. This is a loaded gun in KubeJS (a
   token-guarded, sandboxed Starlark; remote admins forward the port over SSH. `ConsoleServer` is
   MC-agnostic and Tier-1 tested over real HTTP; verified end-to-end against a live server. See
   `docs/getting-started.md`.
-- ⏳ **Editor polish.** Syntax highlighting + completion in the web editor - the natural home for the
-  N2 stubs-from-annotations work (one source of truth driving docs and console completion).
+- ✅ **Editor polish.** The web editor has Starlark **syntax highlighting** (hand-rolled, still
+  dependency-free), **Tab**-to-indent / **Shift+Tab** dedent, history persisted across reloads
+  (`localStorage`), and a clear control.
+- ✅ **Autocomplete.** Completion of top-level names and namespace members, driven by a manifest
+  reflected from the same `@StarlarkMethod` annotations as the docs (served at `/symbols`) - so
+  completion can never drift from the API. This is the first slice of the N2 tooling work.
 
 ### N2 - Developer experience and tooling
 
 Make Minelark the nicest KubeJS-alike to build on.
 
-- **Editor autocomplete from the annotations.** Generate Starlark type stubs / an LSP schema from the
-  same `@StarlarkMethod` metadata that already generates the docs, so completion can never drift from
-  the API. This is Minelark's answer to ProbeJS.
-- **A shipped prelude / standard library** of common helpers, so packs stop re-writing the same glue.
-- **Grow the extension API** (`minelark:types` and beyond) so other mods add content types, events,
-  and namespaces cleanly, with examples and a template addon.
+- ✅ **Console autocomplete from the annotations.** A symbol manifest (`ConsoleSymbols`) reflected
+  from the same `@StarlarkMethod` metadata that generates the docs, served at `/symbols` and consumed
+  by the web editor - completion can never drift from the API. Tier-1 tested.
+- ✅ **Python stub artifact.** `DocGenerator` also emits `docs/minelark.pyi` from the same `Phase`
+  table (guarded by `checkApiDocs`, so it can't drift) - the whole documented API as Python types,
+  published as a downloadable and documented under "Editor setup". Honest limit: because Minelark
+  injects namespaces as globals (a `.star` file never `import`s them), a plain stub does not light up
+  completion in an external editor on its own.
+- **Not planned: an IDE/editor extension.** A dedicated extension (or language server) would make
+  external `.star` completion seamless, but the console autocomplete already covers live editing and
+  the `.pyi` is enough as a reference, so it is not worth the maintenance. The console is the
+  completion story.
+- ✅ **Prelude / standard library.** `PreludeApi` adds top-level helpers in **every** phase and the
+  console: `require(condition, message)` (a top-level guard - Starlark forbids a bare top-level `if`),
+  `clamp`, `lerp`, and `rgb`. Being `@StarlarkMethod`s, they flow automatically into the docs, the
+  console autocomplete, and the `.pyi` stub. Tier-1 tested (`PreludeApiTest`); verified live.
+- ✅ **Extension-API guide.** `docs/extending.md` is a complete, copy-pasteable worked example of an
+  addon registering content types (sound groups, tool tiers, armor aliases, custom shapes) via the
+  `minelark:types` entrypoint, checked against the 1.21.1 API. Growing the entrypoint further
+  (mod-registered events / namespaces) is possible future work.
 
 ### N3 - Server-to-client script propagation (flagship)
 

@@ -2,6 +2,7 @@ package ru.nelande.minelark.console;
 
 import org.junit.jupiter.api.Test;
 import ru.nelande.minelark.script.ConsoleSession;
+import ru.nelande.minelark.script.Storage;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -56,6 +57,23 @@ class ConsoleServerTest {
         try {
             assertEquals(401, post(server, "wrong", "{\"code\": \"1\"}").statusCode());
             assertEquals(401, post(server, null, "{\"code\": \"1\"}").statusCode());
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void servesTheSymbolManifest() throws Exception {
+        ConsoleServer server = new ConsoleServer(0, "t",
+                new ConsoleSession(Map.of("storage", new Storage(null))), Runnable::run);
+        server.start();
+        try {
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + "/symbols")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"storage\""), response.body());
+            assertTrue(response.body().contains("\"set\""), response.body());
         } finally {
             server.stop();
         }
