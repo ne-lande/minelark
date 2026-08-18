@@ -54,6 +54,33 @@ public interface PlayerActions {
     default void playSound(String soundId, double volume, double pitch) {
     }
 
+    /** Shows a large title on the player's screen. */
+    default void title(MineText message) {
+    }
+
+    /** Sets the subtitle shown beneath the next {@link #title}. */
+    default void subtitle(MineText message) {
+    }
+
+    /** Shows a message on the player's action bar (above the hotbar). */
+    default void actionbar(MineText message) {
+    }
+
+    /** How many of the item with id {@code itemId} the player is carrying. */
+    default int count(String itemId) {
+        return 0;
+    }
+
+    /** Whether the player is carrying at least {@code count} of the item with id {@code itemId}. */
+    default boolean has(String itemId, int count) {
+        return false;
+    }
+
+    /** Removes up to {@code count} of the item from the player's inventory; returns how many were removed. */
+    default int remove(String itemId, int count) {
+        return 0;
+    }
+
     /** Kills the player. */
     default void kill() {
     }

@@ -108,6 +108,12 @@ Some `ctx` fields are small typed views of game objects rather than plain values
 | `.give_xp(points)` | Grants experience points. |
 | `.set_gamemode(mode)` | Sets `survival`, `creative`, `adventure`, or `spectator`. |
 | `.play_sound(id, volume = 1.0, pitch = 1.0)` | Plays a sound at the player. Unknown ids are ignored. |
+| `.title(message)` | Shows a large title on the player's screen. |
+| `.subtitle(message)` | Sets the subtitle shown beneath the next `title(...)`. |
+| `.actionbar(message)` | Shows a message on the action bar (above the hotbar). |
+| `.count(item)` | How many of an item the player is carrying. |
+| `.has(item, count = 1)` | Whether the player has at least `count` of an item. |
+| `.remove(item, count = 1)` | Removes up to `count` of an item; returns how many were removed. |
 | `.kill()` | Kills the player. |
 
 The action verbs take effect on the server (call them from event or command callbacks). Ids without a
@@ -129,6 +135,9 @@ namespace default to `minecraft:`, and an unknown id is ignored rather than rais
 | `.set_weather(kind)` | Sets `clear`, `rain`, or `thunder`. |
 | `.explode(x, y, z, power = 4.0, fire = False, destroy_blocks = True)` | Creates an explosion (TNT is power 4). |
 | `.strike_lightning(x, y, z)` | Strikes lightning at a position. |
+| `.entities_near(x, y, z, radius = 8.0, type = None)` | A list of entities within `radius` (players included); `type` filters by entity id. |
+| `.players()` | A list of the players currently in this world. |
+| `.nearest_player(x, y, z)` | The closest player to a point, or `None` if there are none. |
 
 **`ctx.player.held_item`** (and other stacks) - an item stack:
 
@@ -195,6 +204,28 @@ For scripts in `minelark/server/`.
 | `BLOCK_PLACED` | Just before a player places a block. | `player`, `block`, `x`, `y`, `z`, `level` | yes | - |
 | `COMMAND` | Before a command runs. | `player` (absent for the console), `command` | yes | `command` |
 | `EXPLOSION` | An explosion goes off (notification). | `x`, `y`, `z`, `power`, `level` | no | - |
+| `USE_BLOCK` | A player right-clicks a block. | `player`, `block`, `x`, `y`, `z`, `hand`, `level` | yes | - |
+| `USE_ITEM` | A player right-clicks with an item (not at a block). | `player`, `item`, `hand` | yes | - |
+| `USE_ENTITY` | A player right-clicks an entity. | `player`, `entity`, `hand` | yes | - |
+| `ATTACK_ENTITY` | A player left-clicks (attacks) an entity. | `player`, `entity`, `hand` | yes | - |
+| `ENTITY_DEATH` | A non-player living entity is about to die. | `entity`, `source`, `amount`, `attacker` (if any) | yes | - |
+| `ENTITY_DAMAGE` | A living entity (mob or player) is about to take damage. | `entity`, `source`, `amount`, `player` (if the victim is one) | yes | - |
+| `PLAYER_RESPAWN` | A player has respawned. | `player` | no | - |
+| `DIMENSION_CHANGE` | A player moved to another dimension. | `player`, `origin`, `destination` | no | - |
+| `PLAYER_TICK` | Every server tick, once per online player. | `player` | no | - |
+
+`hand` is `"main"` or `"off"`. `PLAYER_TICK` only fires while it has a listener, so an idle server pays
+nothing - but keep the callback cheap, it runs for every player 20 times a second.
+
+```python
+# server/no_fire.star - stop players lighting fires with flint and steel
+def block_flint(ctx):
+    if ctx.item.id == "minecraft:flint_and_steel":
+        ctx.cancel()
+        ctx.player.actionbar(text("No fires here.").color("red"))
+
+events.minelark.USE_ITEM.on(block_flint)
+```
 
 ### Client events
 

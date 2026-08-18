@@ -52,6 +52,7 @@ nav:
       - Loot: api/loot.md
       - Datapack: api/datapack.md
       - Storage: api/storage.md
+      - Timers: api/timers.md
       - Client: api/client.md
       - HUD: api/hud.md
       - Networking: api/net.md

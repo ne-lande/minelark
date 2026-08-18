@@ -69,6 +69,9 @@ class WorldActionsTest {
             ex = x; ey = y; ez = z; power = pw; fire = f; destroy = d; exploded = true;
         }
         @Override public void strikeLightning(double x, double y, double z) { lx = x; ly = y; lz = z; struck = true; }
+        @Override public java.util.List<EntityView> entitiesNear(double x, double y, double z, double r, String t) { return java.util.List.of(); }
+        @Override public java.util.List<PlayerView> players() { return java.util.List.of(); }
+        @Override public PlayerView nearestPlayer(double x, double y, double z) { return null; }
     }
 
     private static final class RecEntity implements EntityActions {

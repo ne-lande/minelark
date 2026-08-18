@@ -3,7 +3,9 @@ package ru.nelande.minelark.script;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkInt;
+import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkValue;
 
 /**
@@ -164,6 +166,44 @@ public final class LevelView implements StarlarkValue {
                     @Param(name = "z", doc = "Strike z.")})
     public void strikeLightning(Object x, Object y, Object z) throws EvalException {
         actions.strikeLightning(Nums.toDouble(x), Nums.toDouble(y), Nums.toDouble(z));
+    }
+
+    // --- queries ---
+
+    @StarlarkMethod(
+            name = "entities_near",
+            doc = "The entities within `radius` blocks of a point, as a list (players included). Pass "
+                    + "`type` to keep only a given entity type, e.g. `type = \"minecraft:zombie\"`.",
+            parameters = {
+                    @Param(name = "x", doc = "Center x."),
+                    @Param(name = "y", doc = "Center y."),
+                    @Param(name = "z", doc = "Center z."),
+                    @Param(name = "radius", named = true, defaultValue = "8.0", doc = "Search radius in blocks."),
+                    @Param(name = "type", named = true, defaultValue = "None",
+                            doc = "An entity type id to filter by, or `None` for all."),
+            })
+    public StarlarkList<EntityView> entitiesNear(Object x, Object y, Object z, Object radius, Object type)
+            throws EvalException {
+        String filter = type == Starlark.NONE ? null : String.valueOf(type);
+        return StarlarkList.immutableCopyOf(actions.entitiesNear(
+                Nums.toDouble(x), Nums.toDouble(y), Nums.toDouble(z), Nums.toDouble(radius), filter));
+    }
+
+    @StarlarkMethod(name = "players", doc = "Every player currently in this world, as a list.")
+    public StarlarkList<PlayerView> players() {
+        return StarlarkList.immutableCopyOf(actions.players());
+    }
+
+    @StarlarkMethod(
+            name = "nearest_player",
+            doc = "The player closest to a point, or `None` if the world has no players.",
+            parameters = {
+                    @Param(name = "x", doc = "Point x."),
+                    @Param(name = "y", doc = "Point y."),
+                    @Param(name = "z", doc = "Point z.")})
+    public Object nearestPlayer(Object x, Object y, Object z) throws EvalException {
+        PlayerView player = actions.nearestPlayer(Nums.toDouble(x), Nums.toDouble(y), Nums.toDouble(z));
+        return player != null ? player : Starlark.NONE;
     }
 
     @Override

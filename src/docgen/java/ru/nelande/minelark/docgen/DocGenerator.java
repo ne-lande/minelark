@@ -5,6 +5,7 @@ import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.StarlarkInt;
 import ru.nelande.minelark.script.Datapack;
 import ru.nelande.minelark.script.HudApi;
+import ru.nelande.minelark.script.Scheduler;
 import ru.nelande.minelark.script.Log;
 import ru.nelande.minelark.script.Loot;
 import ru.nelande.minelark.script.ModsApi;
@@ -223,6 +224,30 @@ public final class DocGenerator {
                             hud.bar("hp", 4, 4, 80, 6, p.health / 20.0, color = "#ff5555", anchor = "bottom_left")
 
                     events.minelark.CLIENT_TICK.on(on_tick)
+                    ```
+                    """),
+            new Phase(
+                    "Timers API Reference",
+                    "timers.md",
+                    Scheduler.class,
+                    "timers",
+                    """
+                    The **`timers`** namespace, available to scripts in the **`minelark/server/`** folder.
+                    Run a function later, or on a repeating interval, measured in game ticks (20 ticks =
+                    1 second) - handy for cooldowns, delayed effects, and anything that should happen "in
+                    a bit" without hand-counting ticks in a `SERVER_TICK` handler. Callbacks take no
+                    arguments. A `/minelark reload` starts fresh, so pending timers do not survive it.
+
+                    ```python
+                    def announce():
+                        log.info("10 seconds have passed")
+
+                    def on_started(ctx):
+                        timers.after(200, announce)          # once, after 200 ticks (10s)
+                        handle = timers.every(20, tick_once)  # every second; keep the handle to cancel
+                        # timers.cancel(handle)
+
+                    events.minelark.SERVER_STARTED.on(on_started)
                     ```
                     """)
             // Note: the `events` API (docs/api/events.md) is hand-written - its nested

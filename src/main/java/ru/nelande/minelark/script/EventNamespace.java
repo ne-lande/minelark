@@ -113,6 +113,88 @@ public final class EventNamespace implements StarlarkValue {
         return serverEvent("EXPLOSION", "explosion");
     }
 
+    @StarlarkMethod(
+            name = "USE_BLOCK",
+            structField = true,
+            doc = "Fires when a player right-clicks a block. Cancellable. `ctx.player`, `ctx.block` "
+                    + "(the block id), `ctx.x` / `ctx.y` / `ctx.z`, and `ctx.hand` (`main` or `off`).")
+    public Event useBlock() throws EvalException {
+        return serverEvent("USE_BLOCK", "use_block");
+    }
+
+    @StarlarkMethod(
+            name = "USE_ITEM",
+            structField = true,
+            doc = "Fires when a player right-clicks with an item (not aimed at a block). Cancellable. "
+                    + "`ctx.player`, `ctx.item` (the held stack), and `ctx.hand` (`main` or `off`).")
+    public Event useItem() throws EvalException {
+        return serverEvent("USE_ITEM", "use_item");
+    }
+
+    @StarlarkMethod(
+            name = "USE_ENTITY",
+            structField = true,
+            doc = "Fires when a player right-clicks an entity. Cancellable. `ctx.player`, `ctx.entity`, "
+                    + "and `ctx.hand` (`main` or `off`).")
+    public Event useEntity() throws EvalException {
+        return serverEvent("USE_ENTITY", "use_entity");
+    }
+
+    @StarlarkMethod(
+            name = "ATTACK_ENTITY",
+            structField = true,
+            doc = "Fires when a player left-clicks (attacks) an entity. Cancellable. `ctx.player`, "
+                    + "`ctx.entity`, and `ctx.hand` (`main` or `off`).")
+    public Event attackEntity() throws EvalException {
+        return serverEvent("ATTACK_ENTITY", "attack_entity");
+    }
+
+    @StarlarkMethod(
+            name = "ENTITY_DEATH",
+            structField = true,
+            doc = "Fires when a non-player living entity is about to die. Cancellable (keeps it alive). "
+                    + "`ctx.entity`, `ctx.source` (the damage type name), `ctx.amount`, and `ctx.attacker` "
+                    + "(if any). For players, use `PLAYER_DEATH` instead.")
+    public Event entityDeath() throws EvalException {
+        return serverEvent("ENTITY_DEATH", "entity_death");
+    }
+
+    @StarlarkMethod(
+            name = "ENTITY_DAMAGE",
+            structField = true,
+            doc = "Fires when a living entity (a mob or a player) is about to take damage. Cancellable "
+                    + "(prevents it). `ctx.entity`, `ctx.source` (the damage type name), `ctx.amount`, and "
+                    + "`ctx.player` when the victim is a player.")
+    public Event entityDamage() throws EvalException {
+        return serverEvent("ENTITY_DAMAGE", "entity_damage");
+    }
+
+    @StarlarkMethod(
+            name = "PLAYER_RESPAWN",
+            structField = true,
+            doc = "Fires after a player respawns. `ctx.player` is the respawned player.")
+    public Event playerRespawn() throws EvalException {
+        return serverEvent("PLAYER_RESPAWN", "player_respawn");
+    }
+
+    @StarlarkMethod(
+            name = "DIMENSION_CHANGE",
+            structField = true,
+            doc = "Fires after a player moves to another dimension. `ctx.player`, `ctx.origin` and "
+                    + "`ctx.destination` (the worlds moved from and to).")
+    public Event dimensionChange() throws EvalException {
+        return serverEvent("DIMENSION_CHANGE", "dimension_change");
+    }
+
+    @StarlarkMethod(
+            name = "PLAYER_TICK",
+            structField = true,
+            doc = "Fires once per online player every server tick (20 times a second). `ctx.player` is "
+                    + "the player. Only fires while it has a listener, so an idle server pays nothing.")
+    public Event playerTick() throws EvalException {
+        return serverEvent("PLAYER_TICK", "player_tick");
+    }
+
     // --- Client events (scripts in `client/`). These run on the player's own machine. ---
 
     @StarlarkMethod(

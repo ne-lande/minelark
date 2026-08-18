@@ -35,6 +35,20 @@ public interface LevelActions {
     /** Strikes lightning at the given position. */
     void strikeLightning(double x, double y, double z);
 
+    // --- queries (reading the world) ---
+
+    /**
+     * The entities within {@code radius} blocks of the given point, as views (players included). A
+     * non-null {@code typeFilter} keeps only entities whose type id matches.
+     */
+    java.util.List<EntityView> entitiesNear(double x, double y, double z, double radius, String typeFilter);
+
+    /** Every player currently in this world, as views. */
+    java.util.List<PlayerView> players();
+
+    /** The player closest to the given point, or {@code null} if the world has no players. */
+    PlayerView nearestPlayer(double x, double y, double z);
+
     /** A sink that does nothing - for read-only contexts (tests, the client) and phases with no world. */
     LevelActions NOOP = new LevelActions() {
         @Override public void setBlock(int x, int y, int z, String blockId) {
@@ -63,6 +77,18 @@ public interface LevelActions {
         }
 
         @Override public void strikeLightning(double x, double y, double z) {
+        }
+
+        @Override public java.util.List<EntityView> entitiesNear(double x, double y, double z, double radius, String typeFilter) {
+            return java.util.List.of();
+        }
+
+        @Override public java.util.List<PlayerView> players() {
+            return java.util.List.of();
+        }
+
+        @Override public PlayerView nearestPlayer(double x, double y, double z) {
+            return null;
         }
     };
 }

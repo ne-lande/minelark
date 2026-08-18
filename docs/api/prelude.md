@@ -17,6 +17,18 @@ hud.bar("hp", 4, 4, 80, 6, clamp(ctx.player.health / 20.0, 0, 1),
 
 ---
 
+## `choice(seq)`
+
+Returns a random element from a non-empty list (or other sequence).
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `seq` | sequence | yes | - | The sequence to pick from. |
+
+---
+
 ## `clamp(value, min, max)`
 
 Constrains `value` to the range `[min, max]`. Returns an int if all three are ints, else a float.
@@ -31,6 +43,35 @@ Constrains `value` to the range `[min, max]`. Returns an int if all three are in
 
 ---
 
+## `dist(x1, y1, z1, x2, y2, z2)`
+
+The straight-line distance between two points `(x1, y1, z1)` and `(x2, y2, z2)`.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `x1` | any | yes | - | First point x. |
+| `y1` | any | yes | - | First point y. |
+| `z1` | any | yes | - | First point z. |
+| `x2` | any | yes | - | Second point x. |
+| `y2` | any | yes | - | Second point y. |
+| `z2` | any | yes | - | Second point z. |
+
+---
+
+## `from_json(text)`
+
+Parses a JSON string back into a value (dict, list, string, number, bool, `None`).
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `text` | string | yes | - | The JSON text to parse. |
+
+---
+
 ## `lerp(a, b, t)`
 
 Linearly interpolates from `a` to `b` by `t` (0.0 = a, 1.0 = b). Returns a float.
@@ -42,6 +83,25 @@ Linearly interpolates from `a` to `b` by `t` (0.0 = a, 1.0 = b). Returns a float
 | `a` | any | yes | - | The value at t = 0. |
 | `b` | any | yes | - | The value at t = 1. |
 | `t` | any | yes | - | The blend factor. |
+
+---
+
+## `rand()`
+
+A random float in `[0.0, 1.0)`. Note: random values are not deterministic across runs.
+
+---
+
+## `rand_int(min, max)`
+
+A random integer between `min` and `max`, inclusive.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `min` | int | yes | - | The lowest possible value. |
+| `max` | int | yes | - | The highest possible value. |
 
 ---
 
@@ -69,6 +129,18 @@ Builds a `#rrggbb` colour string from red, green, and blue channels (each 0-255)
 | `red` | int | yes | - | Red, 0-255. |
 | `green` | int | yes | - | Green, 0-255. |
 | `blue` | int | yes | - | Blue, 0-255. |
+
+---
+
+## `to_json(value)`
+
+Serialises a value (dict, list, string, number, bool, `None`) to a JSON string.
+
+**Parameters**
+
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `value` | any | yes | - | The value to serialise. |
 
 ---
 

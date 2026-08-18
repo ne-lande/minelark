@@ -200,6 +200,61 @@ public final class PlayerView implements StarlarkValue {
         actions.playSound(sound, Nums.toDouble(volume), Nums.toDouble(pitch));
     }
 
+    @StarlarkMethod(
+            name = "title",
+            doc = "Shows a large title on the player's screen (a string or a `text(...)` component). "
+                    + "Set a `subtitle(...)` first if you want one beneath it.",
+            parameters = {@Param(name = "message", doc = "The title text.")})
+    public void title(Object message) {
+        actions.title(MineText.coerce(message));
+    }
+
+    @StarlarkMethod(
+            name = "subtitle",
+            doc = "Sets the subtitle shown beneath the next `title(...)`.",
+            parameters = {@Param(name = "message", doc = "The subtitle text.")})
+    public void subtitle(Object message) {
+        actions.subtitle(MineText.coerce(message));
+    }
+
+    @StarlarkMethod(
+            name = "actionbar",
+            doc = "Shows a message on the player's action bar (the strip above the hotbar).",
+            parameters = {@Param(name = "message", doc = "The action-bar text.")})
+    public void actionbar(Object message) {
+        actions.actionbar(MineText.coerce(message));
+    }
+
+    @StarlarkMethod(
+            name = "count",
+            doc = "How many of an item the player is carrying.",
+            parameters = {@Param(name = "item", doc = "The item id or a handle.")})
+    public int count(Object item) {
+        return actions.count(String.valueOf(item));
+    }
+
+    @StarlarkMethod(
+            name = "has",
+            doc = "Whether the player is carrying at least `count` of an item.",
+            parameters = {
+                    @Param(name = "item", doc = "The item id or a handle."),
+                    @Param(name = "count", named = true, defaultValue = "1", doc = "The minimum amount."),
+            })
+    public boolean has(Object item, StarlarkInt count) {
+        return actions.has(String.valueOf(item), count.toIntUnchecked());
+    }
+
+    @StarlarkMethod(
+            name = "remove",
+            doc = "Removes up to `count` of an item from the player's inventory; returns how many were removed.",
+            parameters = {
+                    @Param(name = "item", doc = "The item id or a handle."),
+                    @Param(name = "count", named = true, defaultValue = "1", doc = "How many to remove."),
+            })
+    public int remove(Object item, StarlarkInt count) {
+        return actions.remove(String.valueOf(item), count.toIntUnchecked());
+    }
+
     @StarlarkMethod(name = "kill", doc = "Kills the player.")
     public void kill() {
         actions.kill();

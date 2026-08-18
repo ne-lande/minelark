@@ -13,10 +13,16 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.entity.event.v1.ServerEntityWorldChangeEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
 import net.fabricmc.fabric.api.loot.v3.LootTableEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
@@ -38,6 +44,9 @@ import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.effect.StatusEffect;
 import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.player.PlayerInventory;
+import net.minecraft.network.packet.s2c.play.SubtitleS2CPacket;
+import net.minecraft.network.packet.s2c.play.TitleS2CPacket;
 import net.minecraft.particle.ParticleEffect;
 import net.minecraft.particle.ParticleType;
 import net.minecraft.item.ArmorItem;
@@ -78,8 +87,13 @@ import net.minecraft.text.HoverEvent;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Style;
 import net.minecraft.text.TextColor;
+import net.minecraft.util.ActionResult;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.Hand;
 import net.minecraft.util.Rarity;
+import net.minecraft.util.TypedActionResult;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.WorldSavePath;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
@@ -120,8 +134,10 @@ import ru.nelande.minelark.script.MineText;
 import ru.nelande.minelark.script.PlatformInfo;
 import ru.nelande.minelark.script.PlayerActions;
 import ru.nelande.minelark.script.PlayerView;
+import ru.nelande.minelark.script.ApiManifest;
 import ru.nelande.minelark.script.RegistryAccess;
 import ru.nelande.minelark.script.RecipeSpec;
+import ru.nelande.minelark.script.Scheduler;
 import ru.nelande.minelark.script.RemovalSpec;
 import ru.nelande.minelark.console.ConsoleServer;
 import ru.nelande.minelark.net.PushDeliverPayload;
@@ -265,6 +281,8 @@ public class Minelark implements ModInitializer {
     private static final Storage serverWorldStorage = new Storage(null);
     /** The most recently loaded server-script {@code net} handlers (replaced on load/reload). */
     private static ServerNetworkApi serverNetwork = new ServerNetworkApi(ServerNetwork.NOOP, new Log(SCRIPT_LOG));
+    /** The server-script {@code timers} scheduler (replaced on load/reload); pumped each server tick. */
+    private static Scheduler serverScheduler = new Scheduler();
     /** Minelark's config (web console on/off + port), read once at class load. */
     private static final MinelarkConfig config =
             MinelarkConfig.load(FabricLoader.getInstance().getGameDir().resolve(MOD_ID).resolve("config.json"));
@@ -301,7 +319,7 @@ public class Minelark implements ModInitializer {
         try {
             String token = UUID.randomUUID().toString().replace("-", "");
             // The MinecraftServer is itself an Executor, so console evals hop onto the server thread.
-            consoleServer = new ConsoleServer(config.webConsolePort, token, serverConsole(), mc);
+            consoleServer = new ConsoleServer(config.webConsolePort, token, serverConsole(), apiManifest().toJson(), mc);
             consoleServer.start();
             LOGGER.info("Minelark web console: open {}", consoleServer.url());
             return consoleServer;
@@ -435,6 +453,7 @@ public class Minelark implements ModInitializer {
         serverRecipeRemovals = result.recipeRemovals();
         serverLootInjects = result.lootInjects();
         serverNetwork = result.network();
+        serverScheduler = result.scheduler();
         rebuildPushBundle();
         return result;
     }
@@ -533,6 +552,8 @@ public class Minelark implements ModInitializer {
                 flushPendingSends(server);
             }
         });
+        // Drive the server scripts' `timers` scheduler once per tick (cheap no-op when nothing is queued).
+        ServerTickEvents.END_SERVER_TICK.register(server -> serverScheduler.tick(SCRIPT_LOG));
     }
 
     /** The {@code mods} namespace's backing: reads the Fabric mod list. Shared with the client adapter. */
@@ -669,7 +690,19 @@ public class Minelark implements ModInitializer {
 
         ServerLivingEntityEvents.ALLOW_DEATH.register((entity, source, amount) -> {
             if (!(entity instanceof ServerPlayerEntity player)) {
-                return true;
+                // Any other living entity: fire ENTITY_DEATH (cancellable) instead.
+                if (!serverEvents.hasListeners("minelark:entity_death")) {
+                    return true;
+                }
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("entity", entityView(entity));
+                data.put("source", source.getName());
+                data.put("amount", (double) amount);
+                if (source.getAttacker() != null) {
+                    data.put("attacker", entityView(source.getAttacker()));
+                }
+                EventContext ctx = dispatch("minelark:entity_death", data, Set.of(), true);
+                return ctx == null || !ctx.isCancelled();  // false = keep it alive
             }
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("player", playerView(player));
@@ -714,6 +747,102 @@ public class Minelark implements ModInitializer {
                     blockData(playerView(serverPlayer), state, pos, levelView(world)), Set.of(), true);
             return ctx == null || !ctx.isCancelled();  // false = cancel the break
         });
+
+        // Interactions. These callbacks fire on both the client and the server, so keep to the server
+        // world and a real player; cancel by returning FAIL. Gate on listeners (they fire constantly).
+        UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
+            if (world.isClient() || !(player instanceof ServerPlayerEntity serverPlayer)
+                    || !serverEvents.hasListeners("minelark:use_block")) {
+                return ActionResult.PASS;
+            }
+            BlockPos pos = hit.getBlockPos();
+            Map<String, Object> data = blockData(playerView(serverPlayer), world.getBlockState(pos), pos, levelView(world));
+            data.put("hand", handName(hand));
+            EventContext ctx = dispatch("minelark:use_block", data, Set.of(), true);
+            return cancelled(ctx) ? ActionResult.FAIL : ActionResult.PASS;
+        });
+
+        UseItemCallback.EVENT.register((player, world, hand) -> {
+            if (world.isClient() || !(player instanceof ServerPlayerEntity serverPlayer)
+                    || !serverEvents.hasListeners("minelark:use_item")) {
+                return TypedActionResult.pass(player.getStackInHand(hand));
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("player", playerView(serverPlayer));
+            data.put("item", itemStackView(player.getStackInHand(hand)));
+            data.put("hand", handName(hand));
+            EventContext ctx = dispatch("minelark:use_item", data, Set.of(), true);
+            return cancelled(ctx)
+                    ? TypedActionResult.fail(player.getStackInHand(hand))
+                    : TypedActionResult.pass(player.getStackInHand(hand));
+        });
+
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) ->
+                interactEntity("minelark:use_entity", player, world, hand, entity));
+
+        AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) ->
+                interactEntity("minelark:attack_entity", player, world, hand, entity));
+
+        // A living entity (mob or player) is about to take damage. Cancellable (return false to prevent).
+        ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
+            if (!serverEvents.hasListeners("minelark:entity_damage")) {
+                return true;
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("entity", entityView(entity));
+            if (entity instanceof ServerPlayerEntity player) {
+                data.put("player", playerView(player));
+            }
+            data.put("source", source.getName());
+            data.put("amount", (double) amount);
+            EventContext ctx = dispatch("minelark:entity_damage", data, Set.of(), true);
+            return ctx == null || !ctx.isCancelled();  // false = prevent the damage
+        });
+
+        ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) ->
+                dispatch("minelark:player_respawn", data("player", playerView(newPlayer)), Set.of(), false));
+
+        ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD.register((player, origin, destination) -> {
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("player", playerView(player));
+            data.put("origin", levelView(origin));
+            data.put("destination", levelView(destination));
+            dispatch("minelark:dimension_change", data, Set.of(), false);
+        });
+
+        // Per-player tick, gated so an idle server (or one with no listener) pays nothing.
+        ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (!serverEvents.hasListeners("minelark:player_tick")) {
+                return;
+            }
+            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                dispatch("minelark:player_tick", data("player", playerView(player)), Set.of(), false);
+            }
+        });
+    }
+
+    /** Shared body for USE_ENTITY / ATTACK_ENTITY: fire on the server for a real player, cancel via FAIL. */
+    private static ActionResult interactEntity(String id, net.minecraft.entity.player.PlayerEntity player,
+            World world, Hand hand, net.minecraft.entity.Entity entity) {
+        if (world.isClient() || !(player instanceof ServerPlayerEntity serverPlayer)
+                || !serverEvents.hasListeners(id)) {
+            return ActionResult.PASS;
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("player", playerView(serverPlayer));
+        data.put("entity", entityView(entity));
+        data.put("hand", handName(hand));
+        EventContext ctx = dispatch(id, data, Set.of(), true);
+        return cancelled(ctx) ? ActionResult.FAIL : ActionResult.PASS;
+    }
+
+    private static boolean cancelled(EventContext ctx) {
+        return ctx != null && ctx.isCancelled();
+    }
+
+    /** The script-facing name for a hand: {@code "main"} or {@code "off"}. */
+    private static String handName(Hand hand) {
+        return hand == Hand.OFF_HAND ? "off" : "main";
     }
 
     // --- shared event plumbing, also called by the mixins below ---
@@ -808,10 +937,75 @@ public class Minelark implements ModInitializer {
                     }
 
                     @Override
+                    public void title(MineText message) {
+                        player.networkHandler.sendPacket(new TitleS2CPacket(toMcText(message)));
+                    }
+
+                    @Override
+                    public void subtitle(MineText message) {
+                        player.networkHandler.sendPacket(new SubtitleS2CPacket(toMcText(message)));
+                    }
+
+                    @Override
+                    public void actionbar(MineText message) {
+                        player.sendMessage(toMcText(message), true);   // true => the action bar overlay
+                    }
+
+                    @Override
+                    public int count(String itemId) {
+                        Item item = resolveItem(itemId);
+                        if (item == null) {
+                            return 0;
+                        }
+                        PlayerInventory inv = player.getInventory();
+                        int total = 0;
+                        for (int i = 0; i < inv.size(); i++) {
+                            ItemStack stack = inv.getStack(i);
+                            if (stack.getItem() == item) {
+                                total += stack.getCount();
+                            }
+                        }
+                        return total;
+                    }
+
+                    @Override
+                    public boolean has(String itemId, int count) {
+                        return count(itemId) >= count;
+                    }
+
+                    @Override
+                    public int remove(String itemId, int count) {
+                        Item item = resolveItem(itemId);
+                        if (item == null || count <= 0) {
+                            return 0;
+                        }
+                        PlayerInventory inv = player.getInventory();
+                        int remaining = count;
+                        int removed = 0;
+                        for (int i = 0; i < inv.size() && remaining > 0; i++) {
+                            ItemStack stack = inv.getStack(i);
+                            if (stack.getItem() == item) {
+                                int take = Math.min(remaining, stack.getCount());
+                                stack.decrement(take);
+                                remaining -= take;
+                                removed += take;
+                            }
+                        }
+                        return removed;
+                    }
+
+                    @Override
                     public void kill() {
                         player.kill();
                     }
                 });
+    }
+
+    /** Resolves an item id (bare -> {@code minecraft:}) to an {@link Item}, or {@code null} if unknown/air. */
+    private static Item resolveItem(String id) {
+        Identifier ident = Identifier.tryParse(id);
+        Item item = ident == null ? null : Registries.ITEM.get(ident);
+        return item == null || item == Items.AIR ? null : item;
     }
 
     private static LevelView levelView(World world) {
@@ -889,6 +1083,43 @@ public class Minelark implements ModInitializer {
             @Override
             public void strikeLightning(double x, double y, double z) {
                 EntityType.LIGHTNING_BOLT.spawn(world, BlockPos.ofFloored(x, y, z), SpawnReason.COMMAND);
+            }
+
+            @Override
+            public List<EntityView> entitiesNear(double x, double y, double z, double radius, String typeFilter) {
+                Box box = new Box(x - radius, y - radius, z - radius, x + radius, y + radius, z + radius);
+                double r2 = radius * radius;
+                List<EntityView> result = new ArrayList<>();
+                for (Entity entity : world.getOtherEntities(null, box, e -> typeFilter == null
+                        || EntityType.getId(e.getType()).toString().equals(typeFilter))) {
+                    if (entity.squaredDistanceTo(x, y, z) <= r2) {   // Box is a cube; keep a true sphere
+                        result.add(entityView(entity));
+                    }
+                }
+                return result;
+            }
+
+            @Override
+            public List<PlayerView> players() {
+                List<PlayerView> result = new ArrayList<>();
+                for (ServerPlayerEntity player : world.getPlayers()) {
+                    result.add(playerView(player));
+                }
+                return result;
+            }
+
+            @Override
+            public PlayerView nearestPlayer(double x, double y, double z) {
+                ServerPlayerEntity nearest = null;
+                double best = Double.MAX_VALUE;
+                for (ServerPlayerEntity player : world.getPlayers()) {
+                    double d = player.squaredDistanceTo(x, y, z);
+                    if (d < best) {
+                        best = d;
+                        nearest = player;
+                    }
+                }
+                return nearest == null ? null : playerView(nearest);
             }
         };
     }
@@ -1354,6 +1585,8 @@ public class Minelark implements ModInitializer {
                             .then(CommandManager.argument("code", StringArgumentType.greedyString())
                                     .executes(ctx -> evalConsole(
                                             ctx.getSource(), StringArgumentType.getString(ctx, "code")))))
+                    .then(CommandManager.literal("api")
+                            .executes(ctx -> dumpApi(ctx.getSource())))
                     .then(CommandManager.literal("console")
                             .executes(ctx -> openConsole(ctx.getSource()))
                             .then(CommandManager.literal("stop").executes(ctx -> {
@@ -1502,6 +1735,35 @@ public class Minelark implements ModInitializer {
         source.sendFeedback(() -> link, false);
         source.sendFeedback(() -> Text.literal("(loopback only - on a remote server open it on the "
                 + "server machine, or forward the port over SSH)"), false);
+        return 1;
+    }
+
+    /** The self-describing API manifest for this exact build (mod + MC version, reflected from annotations). */
+    private static ApiManifest apiManifest() {
+        PlatformInfo platform = platformInfo();
+        String minelark = platform.version(MOD_ID);
+        String minecraft = platform.version("minecraft");
+        return ApiManifest.of(
+                minelark == null ? "unknown" : minelark,
+                minecraft == null ? "unknown" : minecraft,
+                StarlarkHost.describeApi());
+    }
+
+    /** Writes this build's API manifest (JSON + Markdown) to {@code minelark/api/} and reports the version. */
+    private static int dumpApi(ServerCommandSource source) {
+        ApiManifest manifest = apiManifest();
+        Path dir = scriptDir("api");
+        try {
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("minelark-api.json"), manifest.toJson());
+            Files.writeString(dir.resolve("minelark-api.md"), manifest.toMarkdown());
+        } catch (IOException e) {
+            source.sendError(Text.literal("Minelark: could not write the API manifest (see the log)."));
+            LOGGER.error("Minelark: failed to write API manifest to {}", dir, e);
+            return 0;
+        }
+        source.sendFeedback(() -> Text.literal("Minelark: wrote this build's API to minelark/api/ "
+                + "(minelark-api.json + .md)."), false);
         return 1;
     }
 

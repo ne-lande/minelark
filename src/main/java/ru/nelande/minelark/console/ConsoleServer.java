@@ -41,15 +41,19 @@ public final class ConsoleServer {
     private final String token;
     private final int port;
     private final String page;
+    private final String apiJson;
 
     /**
      * Binds a console server to {@code 127.0.0.1:port}. Does not start it yet.
      *
      * @param session    the persistent REPL the console evaluates against
+     * @param apiJson    the full self-describing API manifest, served (token-free) at {@code /api}
      * @param gameThread runs a task on the game thread (a {@code MinecraftServer} is such an executor)
      */
-    public ConsoleServer(int port, String token, ConsoleSession session, Executor gameThread) throws IOException {
+    public ConsoleServer(int port, String token, ConsoleSession session, String apiJson, Executor gameThread)
+            throws IOException {
         this.session = session;
+        this.apiJson = apiJson;
         this.gameThread = gameThread;
         this.token = token;
         this.page = loadPage();
@@ -58,6 +62,7 @@ public final class ConsoleServer {
         this.port = http.getAddress().getPort();
         http.createContext("/", this::handleRoot);
         http.createContext("/symbols", this::handleSymbols);
+        http.createContext("/api", this::handleApi);
         http.createContext("/eval", this::handleEval);
         http.setExecutor(Executors.newFixedThreadPool(2, runnable -> {
             Thread thread = new Thread(runnable, "minelark-console");
@@ -90,6 +95,11 @@ public final class ConsoleServer {
     /** The autocomplete manifest (public API names, so no token needed - the same info as the docs). */
     private void handleSymbols(HttpExchange exchange) throws IOException {
         respond(exchange, 200, "application/json", session.symbolsJson());
+    }
+
+    /** The full self-describing API manifest for this build (public info, so no token needed). */
+    private void handleApi(HttpExchange exchange) throws IOException {
+        respond(exchange, 200, "application/json", apiJson);
     }
 
     private void handleEval(HttpExchange exchange) throws IOException {

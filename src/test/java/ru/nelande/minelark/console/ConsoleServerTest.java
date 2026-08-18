@@ -1,7 +1,9 @@
 package ru.nelande.minelark.console;
 
 import org.junit.jupiter.api.Test;
+import ru.nelande.minelark.script.ApiManifest;
 import ru.nelande.minelark.script.ConsoleSession;
+import ru.nelande.minelark.script.StarlarkHost;
 import ru.nelande.minelark.script.Storage;
 
 import java.net.URI;
@@ -20,8 +22,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ConsoleServerTest {
 
+    private static final String API_JSON =
+            ApiManifest.of("test", "test", StarlarkHost.describeApi()).toJson();
+
     private static ConsoleServer server(String token) throws Exception {
-        return new ConsoleServer(0, token, new ConsoleSession(Map.of()), Runnable::run);
+        return new ConsoleServer(0, token, new ConsoleSession(Map.of()), API_JSON, Runnable::run);
     }
 
     @Test
@@ -65,7 +70,7 @@ class ConsoleServerTest {
     @Test
     void servesTheSymbolManifest() throws Exception {
         ConsoleServer server = new ConsoleServer(0, "t",
-                new ConsoleSession(Map.of("storage", new Storage(null))), Runnable::run);
+                new ConsoleSession(Map.of("storage", new Storage(null))), API_JSON, Runnable::run);
         server.start();
         try {
             HttpResponse<String> response = HttpClient.newHttpClient().send(
@@ -74,6 +79,22 @@ class ConsoleServerTest {
             assertEquals(200, response.statusCode());
             assertTrue(response.body().contains("\"storage\""), response.body());
             assertTrue(response.body().contains("\"set\""), response.body());
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void servesTheApiManifest() throws Exception {
+        ConsoleServer server = server("t");
+        server.start();
+        try {
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + "/api")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("\"namespaces\""), response.body());
+            assertTrue(response.body().contains("\"recipes\""), response.body());
         } finally {
             server.stop();
         }

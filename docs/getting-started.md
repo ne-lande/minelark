@@ -333,6 +333,15 @@ gem("sapphire")
 Each imported file runs once and is cached. If two files import each other, Minelark reports the
 cycle instead of hanging.
 
+## The API for your build
+
+This website tracks the latest version, so if you run a different Minecraft version its docs may not
+match exactly. To get the API of the *exact* jar you are running, ask it: `/minelark api` writes
+`minelark/api/minelark-api.json` and `minelark/api/minelark-api.md` - a full reference (namespaces,
+events, and the `ctx` value types, with signatures and docs), stamped with the mod and Minecraft
+version. It is reflected from the jar itself, so it can never be out of date for that build. If the web
+console is enabled, the same manifest is served at `/api`.
+
 ## Next steps
 
 - [The Starlark Language](language.md) if you're new to Starlark.

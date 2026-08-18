@@ -4,7 +4,9 @@ import com.google.common.collect.ImmutableMap;
 import net.starlark.java.eval.Starlark;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -80,6 +82,7 @@ public final class StarlarkHost {
         Events events = new Events(console, Events.Scope.SERVER);
         CommandsApi commands = new CommandsApi(console);
         ServerNetworkApi net = new ServerNetworkApi(network, console);
+        Scheduler timers = new Scheduler();
         ImmutableMap<String, Object> env = environmentWith(
                 console,
                 Map.ofEntries(
@@ -92,12 +95,13 @@ public final class StarlarkHost {
                         Map.entry("net", net),
                         Map.entry("events", events),
                         Map.entry("commands", commands),
+                        Map.entry("timers", timers),
                         Map.entry("mods", new ModsApi(platform)),
                         Map.entry("registry", new RegistryApi(registry))),
                 new TextApi());
         int scripts = new ScriptEngine(serverDir, env, console, log).runAll();
         return new ServerResult(recipes.recipes(), recipes.removals(), tags.tags(), loot.entityDropSpecs(),
-                loot.injectSpecs(), datapack.jsonFiles(), events, commands, net, scripts);
+                loot.injectSpecs(), datapack.jsonFiles(), events, commands, net, timers, scripts);
     }
 
     /**
@@ -209,6 +213,65 @@ public final class StarlarkHost {
                         "registry", new RegistryApi(registry)),
                 new TextApi());
         return new ConsoleSession(env);
+    }
+
+    /**
+     * Describes the whole scripting API by phase, for the self-describing manifest ({@code /minelark
+     * api} and the console {@code /api}). Builds the same namespace and builtin holders each phase
+     * predeclares - with no-op / empty dependencies, since only their {@code @StarlarkMethod}
+     * annotations are read, never invoked. Keep the entries in step with the {@code run*} methods above.
+     */
+    public static List<ApiManifest.Phase> describeApi() {
+        Log log = new Log((level, message) -> { });   // reflection only; nothing is executed
+        ClientAccess noClient = new ClientAccess() {
+            @Override public PlayerView player() { return null; }
+            @Override public LevelView world() { return null; }
+            @Override public void sendChat(String message) { }
+            @Override public void showMessage(MineText message) { }
+        };
+        List<ApiManifest.Phase> phases = new ArrayList<>();
+
+        Map<String, Object> startupNs = new LinkedHashMap<>();
+        startupNs.put("log", log);
+        Map<String, Object> startupTop = new LinkedHashMap<>();
+        startupTop.put("content", new StartupApi(TypeCatalog.VANILLA_DEFAULTS));
+        startupTop.put("prelude", new PreludeApi());
+        phases.add(new ApiManifest.Phase("startup", startupNs, startupTop));
+
+        Map<String, Object> serverNs = new LinkedHashMap<>();
+        serverNs.put("log", log);
+        serverNs.put("recipes", new Recipes());
+        serverNs.put("tags", new Tags());
+        serverNs.put("loot", new Loot());
+        serverNs.put("datapack", new Datapack());
+        serverNs.put("storage", new Storage(null));
+        serverNs.put("world", new Storage(null));
+        serverNs.put("net", new ServerNetworkApi(ServerNetwork.NOOP, log));
+        serverNs.put("events", new Events(log, Events.Scope.SERVER));
+        serverNs.put("commands", new CommandsApi(log));
+        serverNs.put("timers", new Scheduler());
+        serverNs.put("mods", new ModsApi(PlatformInfo.EMPTY));
+        serverNs.put("registry", new RegistryApi(RegistryAccess.EMPTY));
+        Map<String, Object> serverTop = new LinkedHashMap<>();
+        serverTop.put("text", new TextApi());
+        serverTop.put("prelude", new PreludeApi());
+        phases.add(new ApiManifest.Phase("server", serverNs, serverTop));
+
+        Map<String, Object> clientNs = new LinkedHashMap<>();
+        clientNs.put("log", log);
+        clientNs.put("events", new Events(log, Events.Scope.CLIENT));
+        clientNs.put("client", new ClientApi(noClient));
+        clientNs.put("debug", new DebugApi());
+        clientNs.put("hud", new HudApi());
+        clientNs.put("net", new ClientNetworkApi(ClientNetwork.NOOP, log));
+        clientNs.put("mods", new ModsApi(PlatformInfo.EMPTY));
+        clientNs.put("registry", new RegistryApi(RegistryAccess.EMPTY));
+        Map<String, Object> clientTop = new LinkedHashMap<>();
+        clientTop.put("text", new TextApi());
+        clientTop.put("prelude", new PreludeApi());
+        phases.add(new ApiManifest.Phase("client", clientNs, clientTop));
+
+        return phases;
     }
 
     /**
